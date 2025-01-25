@@ -1,0 +1,67 @@
+@startuml
+actor User
+participant "Eagle App" as Eagle
+participant "index.html" as UI
+participant "plugin.js" as Plugin
+participant "yt-dlp.exe" as ytDlp
+participant "YouTube" as YT
+participant "Filesystem" as FS
+participant "Eagle API" as API
+
+User -> Eagle : Run Plugin
+activate Eagle
+
+Eagle -> Plugin : onPluginCreate
+activate Plugin
+Plugin -> Plugin : Check FFmpeg installation
+Plugin --> Eagle : Return from onPluginCreate
+deactivate Plugin
+
+Eagle -> UI : Load index.html
+activate UI
+
+Eagle -> Plugin : onPluginRun
+activate Plugin
+Plugin --> Eagle : Return from onPluginRun
+deactivate Plugin
+
+User -> UI : Enter YouTube Playlist URL
+User -> UI : Click "Download"
+UI -> Plugin : window.handleDownload(url)
+activate Plugin
+
+Plugin -> FS : Create download folder if not exists
+Plugin -> ytDlp : spawn(yt-dlp.exe, args)
+activate ytDlp
+
+ytDlp -> YT : Download playlist items
+activate YT
+YT --> ytDlp : Video/Audio data
+deactivate YT
+
+ytDlp -> FS : Save downloaded files
+
+Plugin -> UI : Update UI with progress (stdout/stderr)
+
+ytDlp --> Plugin : Exit code
+deactivate ytDlp
+
+Plugin -> Plugin : if (code === 0) importDownloadedFiles
+activate Plugin
+
+Plugin -> FS : Read files from download folder
+loop for each file
+    Plugin -> API : eagle.item.addFromPath(file)
+    activate API
+    API --> Plugin : Success/Error
+    deactivate API
+end
+
+Plugin --> UI : Update UI with "Download complete!"
+deactivate Plugin
+
+UI --> User : Display download status
+deactivate UI
+deactivate Eagle
+
+@enduml

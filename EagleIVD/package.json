@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "axion": "^0.1.0",
+    "axios": "^1.7.9",
+    "nedb-promises": "^6.2.3",
+    "youtube-dl-exec": "^3.0.12"
+  }
+}

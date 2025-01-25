@@ -1,0 +1,31 @@
+@startuml
+skinparam componentStyle rectangle
+
+package "Eagle Plugin" {
+  [index.html] <<HTML>> as UI
+  [plugin.js] <<JavaScript>> as Plugin
+  [manifest.json] <<JSON>> as Manifest
+  folder "downloads" as Downloads
+}
+
+package "Eagle App" {
+  [Eagle API] as EagleAPI
+}
+
+package "External" {
+  [YouTube] as YT
+  [Other Video Sites] as OVS
+  [FFmpeg] as FFMPEG
+  [yt-dlp.exe] as YTDLP
+}
+
+UI -- Plugin : User Interaction
+Plugin -- Manifest : Reads Config
+Plugin -- Downloads : Saves Files
+Plugin -- EagleAPI : Interacts (Add Item, Create Folder)
+Plugin -- YTDLP : Spawns Process
+YTDLP -- YT : Fetches Video & Metadata
+YTDLP -- OVS : Fetches Video & Metadata
+YTDLP -- FFMPEG: Uses for processing
+
+@enduml

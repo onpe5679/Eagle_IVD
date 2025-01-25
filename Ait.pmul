@@ -1,0 +1,136 @@
+@startuml
+
+skinparam componentStyle rectangle
+
+package "Eagle Plugin: AI Autotagger" {
+
+  [사용자 입력 처리] as UserInput
+  [파일 처리] as FileProcessing
+  [프롬프트 생성] as PromptGeneration
+  [API 클라이언트] as APIClient
+  [API 요청] as APIRequest
+  [결과 처리] as ResultProcessing
+  [상태 관리] as StateManagement
+  [UI 구성] as UIComponents
+
+  UserInput ..> FileProcessing : 선택된 항목
+  FileProcessing ..> PromptGeneration : base64 인코딩된 이미지, 항목 정보
+  PromptGeneration ..> APIClient : 제공자, 모델, 프롬프트
+  APIClient ..> APIRequest : API 클라이언트
+  APIRequest ..> ResultProcessing : API 요청 및 응답
+  ResultProcessing ..> StateManagement : 분석 결과, 토큰 사용량
+  StateManagement ..> UIComponents : 상태 정보
+
+  component "startAnalysis" as startAnalysis <<Entry Point>> {
+  }
+
+  component "analyzeItem" as analyzeItem {
+  }
+
+  component "extractFramesFromVideo" as extractFramesFromVideo {
+  }
+
+  component "readFileAsBase64" as readFileAsBase64 {
+  }
+  
+  component "resizeImage" as resizeImage {
+  }
+
+  component "processItemWithLLM" as processItemWithLLM {
+  }
+
+  component "createPromptTemplate" as createPromptTemplate {
+  }
+
+  component "createRuleObject" as createRuleObject {
+  }
+
+  component "getAIClient" as getAIClient {
+  }
+
+  component "callLLMApi" as callLLMApi {
+  }
+
+  component "applyAnalysisResults" as applyAnalysisResults {
+  }
+
+  component "updateItemStatus" as updateItemStatus {
+  }
+
+  component "incrementItemCount" as incrementItemCount {
+  }
+
+  component "addTokens" as addTokens {
+  }
+
+  component "getSelectedItemsFromState" as getSelectedItemsFromState {
+  }
+
+  component "getPresets" as getPresets {
+  }
+  
+  component "getSelectedPresetId" as getSelectedPresetId {
+  }
+  
+  component "getSelectedModel" as getSelectedModel {
+  }
+  
+  component "getSelectedProvider" as getSelectedProvider {
+  }
+
+  component "UIComponents" as UIComponents {
+      [Tooltip] as Tooltip
+      [Button] as Button
+      [Dialog] as Dialog
+      [ProgressBar] as ProgressBar
+      [etc.] as OtherComponents
+  }
+
+  startAnalysis --> getSelectedItemsFromState : 선택된 항목 가져오기
+  getSelectedItemsFromState --> analyzeItem : 각 항목에 대해 분석 시작
+  analyzeItem --> extractFramesFromVideo : 비디오/GIF 프레임 추출
+  analyzeItem --> readFileAsBase64 : 이미지 파일 base64 인코딩
+  readFileAsBase64 --> resizeImage : 이미지 크기 조정 (선택적)
+  extractFramesFromVideo ...> processItemWithLLM : 프레임 전달
+  readFileAsBase64 ...> processItemWithLLM : 인코딩된 이미지 전달
+  processItemWithLLM --> createPromptTemplate : 프롬프트 템플릿 생성
+  processItemWithLLM --> createRuleObject : 규칙 객체 생성
+  processItemWithLLM --> getAIClient : API 클라이언트 가져오기
+  processItemWithLLM --> callLLMApi : LLM API 호출
+  callLLMApi ...> processItemWithLLM : API 응답
+  processItemWithLLM --> applyAnalysisResults : 분석 결과 적용 (태그, 이름, 설명)
+  applyAnalysisResults --> updateItemStatus : 항목 상태 업데이트
+  processItemWithLLM --> incrementItemCount : 처리된 항목 수 증가
+  processItemWithLLM --> addTokens : 토큰 사용량 추가
+  getPresets --> createPromptTemplate
+  getSelectedPresetId --> createPromptTemplate
+  getSelectedPresetId --> analyzeItem
+  getSelectedItemsFromState --> analyzeItem
+  getSelectedModel --> processItemWithLLM
+  getSelectedProvider --> processItemWithLLM
+  UIComponents ...> Tooltip
+  UIComponents ...> Button
+  UIComponents ...> Dialog
+  UIComponents ...> ProgressBar
+  UIComponents ...> OtherComponents
+}
+
+package "Zustand Store (ft)" #DDDDDD {
+  [StateManagement]
+}
+
+package "Eagle API" #DDDDDD {
+  [getSelectedItems] as getSelectedItemsEagleAPI
+  [item.getById] as getItemById
+}
+
+StateManagement ...> getSelectedItemsEagleAPI : uses
+analyzeItem --> getItemById : updates
+StateManagement -[hidden]up-> FileProcessing
+FileProcessing -[hidden]up-> PromptGeneration
+PromptGeneration -[hidden]up-> APIClient
+APIClient -[hidden]up-> APIRequest
+APIRequest -[hidden]up-> ResultProcessing
+ResultProcessing -[hidden]up-> StateManagement
+
+@enduml
