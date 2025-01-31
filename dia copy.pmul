@@ -1,67 +1,83 @@
 @startuml
 actor User
-participant "Eagle App" as Eagle
 participant "index.html" as UI
 participant "plugin.js" as Plugin
+participant "SubscriptionManager" as SM
+participant "DownloadManager" as DM
 participant "yt-dlp.exe" as ytDlp
-participant "YouTube" as YT
+participant "Eagle API" as Eagle
 participant "Filesystem" as FS
-participant "Eagle API" as API
+database "subscriptions.json" as DB
 
-User -> Eagle : Run Plugin
-activate Eagle
-
-Eagle -> Plugin : onPluginCreate
-activate Plugin
-Plugin -> Plugin : Check FFmpeg installation
-Plugin --> Eagle : Return from onPluginCreate
-deactivate Plugin
-
-Eagle -> UI : Load index.html
+User -> UI : Click "Check New Videos"
 activate UI
-
-Eagle -> Plugin : onPluginRun
+UI -> Plugin : window.checkAllSubscriptions()
 activate Plugin
-Plugin --> Eagle : Return from onPluginRun
-deactivate Plugin
+Plugin -> SM : checkAllSubscriptions()
+activate SM
+SM -> DB : Read subscriptions from subscriptions.json
+activate DB
+DB --> SM : Subscriptions data
+deactivate DB
+loop for each subscription in subscriptions
+    SM -> DM : getPlaylistMetadata(url, lastCheckedVideoId)
+    activate DM
+    DM -> ytDlp : spawn(yt-dlp.exe, getPlaylistMetadataArgs)
+    activate ytDlp
+    ytDlp -> ytDlp : Parse metadata
+    ytDlp --> DM : Metadata (JSON array)
+    deactivate ytDlp
+    DM --> SM : Metadata
+    deactivate DM
+    alt New videos found
+        SM -> DM : startDownload(videoUrl, format, quality, speedLimit)
+        activate DM
+        DM -> DM : constructArgs(videoUrl, format, quality, speedLimit)
+        DM -> FS : Create temp folder for playlist (if not exists)
+        activate FS
+        deactivate FS
+        DM -> ytDlp : spawn(yt-dlp.exe, downloadArgs)
+        activate ytDlp
+        ytDlp -> FS : Download video file
+        activate FS
+        FS --> ytDlp : Download progress
+        deactivate FS
+        ytDlp -> Plugin : Update UI with progress
+        Plugin -> UI : Update status, logs, command preview
+        ytDlp --> DM : Exit code (0)
+        deactivate ytDlp
+        DM --> SM : Download complete
+        deactivate DM
+        SM -> Plugin : importDownloadedFiles(downloadFolder, videoUrl, metadata)
+        activate Plugin
+        Plugin -> FS : Read files from download folder
+        activate FS
+        FS --> Plugin : Files list
+        deactivate FS
+        loop for each file
+            Plugin -> Eagle : eagle.item.addFromPath(filePath, fileMetadata)
+            activate Eagle
+            Eagle --> Plugin : Success/Error (Item ID)
+            deactivate Eagle
+            Plugin -> FS : fs.unlink(filePath)
+        end
+        Plugin -> FS : Remove temp folder
+        Plugin --> SM : Video added to Eagle
+        deactivate Plugin
 
-User -> UI : Enter YouTube Playlist URL
-User -> UI : Click "Download"
-UI -> Plugin : window.handleDownload(url)
-activate Plugin
-
-Plugin -> FS : Create download folder if not exists
-Plugin -> ytDlp : spawn(yt-dlp.exe, args)
-activate ytDlp
-
-ytDlp -> YT : Download playlist items
-activate YT
-YT --> ytDlp : Video/Audio data
-deactivate YT
-
-ytDlp -> FS : Save downloaded files
-
-Plugin -> UI : Update UI with progress (stdout/stderr)
-
-ytDlp --> Plugin : Exit code
-deactivate ytDlp
-
-Plugin -> Plugin : if (code === 0) importDownloadedFiles
-activate Plugin
-
-Plugin -> FS : Read files from download folder
-loop for each file
-    Plugin -> API : eagle.item.addFromPath(file)
-    activate API
-    API --> Plugin : Success/Error
-    deactivate API
+        SM -> SM : Update lastCheckedVideoId and lastCheck
+        SM -> DB : Save subscriptions to subscriptions.json
+        activate DB
+        DB --> SM : Success
+        deactivate DB
+    else No new videos
+        SM -> SM : Skip
+    end
 end
-
-Plugin --> UI : Update UI with "Download complete!"
+SM --> Plugin : All subscriptions checked
+deactivate SM
+Plugin -> UI : Update UI with "All subscriptions checked"
 deactivate Plugin
-
-UI --> User : Display download status
+UI --> User : Display status
 deactivate UI
-deactivate Eagle
-
 @enduml
