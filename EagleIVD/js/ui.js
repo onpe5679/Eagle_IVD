@@ -1,212 +1,191 @@
-// js/ui.js
-import Downloader from './downloader.js'; // downloader.js 에서 Downloader 클래스 import
+// ui.js
+import { DownloadManager } from "./downloader.js";
+import { SubscriptionManager } from "./subscriptionManager.js";
+import { spawn } from "child_process";
 
-let downloader; // Downloader 인스턴스를 저장할 변수 (plugin.js 에서 초기화)
+let downloadManager, subscriptionManager;
 
-// UI 업데이트 함수 (plugin.js 에서 ui.js 로 옮겨옴)
-window.updateUI = (message) => { // window.updateUI 로 export 하지 않고, ui.js 내부에서만 사용
-    const statusArea = document.getElementById('statusArea');
+export async function initializeUI(plugin) {
+  const pluginPath = plugin.path;
+  downloadManager = new DownloadManager(pluginPath);
+  subscriptionManager = new SubscriptionManager(pluginPath, downloadManager);
+
+  try {
+    await downloadManager.initialize();
+    await subscriptionManager.loadSubscriptions();
+  } catch (error) {
+    console.error("Failed to initialize managers:", error);
+    return;
+  }
+
+  // UI 업데이트 함수
+  window.updateUI = function(message) {
+    const statusArea = document.getElementById("statusArea");
     if (statusArea) {
-        statusArea.textContent = message;
+      statusArea.textContent = message;
     }
-};
+  };
 
-// 명령어 프리뷰 업데이트 함수 (plugin.js 에서 ui.js 로 옮겨옴)
-window.updateCommandPreview = (cmd) => { // window.updateCommandPreview 로 export 하지 않고, ui.js 내부에서만 사용
-    const commandPreviewArea = document.getElementById('commandPreviewArea');
-    const commandPreview = document.getElementById('commandPreview');
+  window.updateCommandPreview = function(command) {
+    const commandPreviewArea = document.getElementById("commandPreviewArea");
+    const commandPreview = document.getElementById("commandPreview");
     if (commandPreviewArea && commandPreview) {
-        commandPreviewArea.classList.remove('hidden');
-        commandPreview.textContent = cmd;
+      commandPreviewArea.classList.remove("hidden");
+      commandPreview.textContent = command;
     }
-};
+  };
 
-// 진행률 업데이트 함수 (downloader.js 에서 호출)
-function updateProgress(output) {
-    const match = output.match(
-        /\[download\]\s+(\d+\.?\d*)%\s+of\s+([\d.]+[KMGT]?iB)\s+at\s+([\d.]+[KMGT]?iB\/s)\s+ETA\s+([\d:]+)/
-    );
-    if (match) {
-        const progress = match[1];
-        const fileSize = match[2];
-        const speed = match[3];
-        const eta = match[4];
-        updateUI(`Progress: ${progress}%, Size: ${fileSize}, Speed: ${speed}, ETA: ${eta}`);
-    } else {
-        updateUI(output);
+  // 구독 목록 UI 업데이트
+  function updateSubscriptionListUI(subscriptions) {
+    const subscriptionList = document.getElementById("subscriptionList");
+    if (subscriptionList) {
+      subscriptionList.innerHTML = "";
+      subscriptions.forEach((subscription) => {
+        const listItem = document.createElement("div");
+        listItem.className = "subscription-item";
+        listItem.innerHTML = `
+          <div class="font-semibold">${subscription.title || "Untitled Playlist"}</div>
+          <div class="text-sm text-gray-500">URL: ${subscription.url}</div>
+          <div class="text-sm text-gray-500">Folder: ${subscription.folderName || "Default"} | Format: ${subscription.format} ${subscription.quality || ""}</div>
+          <div class="text-sm text-gray-500">Last Check: ${subscription.lastCheck ? new Date(subscription.lastCheck).toLocaleString() : "Never"}</div>
+        `;
+        subscriptionList.appendChild(listItem);
+      });
     }
-}
+  }
 
-
-document.addEventListener('DOMContentLoaded', () => {
-    // UI 요소
-    const statusArea = document.getElementById('statusArea');
-    const logsDiv = document.getElementById('logs');
-    const commandPreviewArea = document.getElementById('commandPreviewArea');
-    const commandPreview = document.getElementById('commandPreview');
-
-    // Downloader 인스턴스 생성 (plugin.js 에서 전달받은 updateUI 함수 사용)
-    downloader = new Downloader(
-        eagle.plugin.path, // eagle 전역 객체 사용 가능
-        updateUI,
-        window.updateCommandPreview, // window.updateCommandPreview 를 ui.js 내부에서 정의했으므로 직접 전달
-        updateProgress // updateProgress 함수 전달
-    );
-
-    downloader.initialize().catch(error => { // Downloader 초기화
-        console.error("Downloader initialization failed:", error);
-    });
-
-
-    // 로그 출력 함수 (plugin.js 에서 ui.js 로 옮겨옴)
-    function appendLog(msg) {
-        const div = document.createElement('div');
-        div.textContent = msg;
-        logsDiv.appendChild(div);
-        logsDiv.scrollTop = logsDiv.scrollHeight;
+  // 단일 영상 다운로드 함수
+  window.handleDownload = async (url, format, quality, speedLimit, concurrency) => {
+    try {
+      console.log("Handling download for single URL:", url);
+      const metadata = await downloadManager.getMetadata(url);
+      console.log("Metadata fetched:", metadata);
+      await downloadManager.startDownload(url, format, quality, speedLimit, concurrency);
+      console.log("Download complete!");
+      updateUI("Download complete!");
+      await importAndRemoveDownloadedFiles(downloadManager.downloadFolder, url, metadata);
+    } catch (error) {
+      console.error("Download failed:", error);
+      updateUI(`Download failed: ${error.message}`);
     }
+  };
 
-    // UI 업데이트 로깅 래핑 함수 (기존 updateUI 함수를 래핑)
-    const _updateUI = window.updateUI; // 기존 updateUI 함수 백업
-    window.updateUI = (message) => { // 래핑된 updateUI 함수로 교체 (window.updateUI 를 덮어씀)
-        _updateUI(message); // 기존 updateUI 함수 호출 (실제 UI 업데이트)
-        appendLog(message); // 로그 출력
-    };
-
-
-    // 탭 관리 (index.html 에서 script 블록에서 옮겨옴)
-    const tabs = document.querySelectorAll('.tab-button');
-    const tabContents = document.querySelectorAll('.tab-content');
-
-    function showTab(targetId) {
-        tabs.forEach(t => t.classList.remove('font-bold'));
-        tabContents.forEach(tc => tc.classList.add('hidden'));
-
-        const btn = Array.from(tabs).find(b => b.dataset.target === targetId);
-        if (btn) btn.classList.add('font-bold');
-        const content = document.getElementById(targetId);
-        if (content) content.classList.remove('hidden');
+  // 재생목록 다운로드 함수
+  window.handleDownloadPlaylist = async (url, format, quality, speedLimit, concurrency) => {
+    try {
+      console.log("Handling download for playlist URL:", url);
+      const playlistMetaArray = await downloadManager.getPlaylistMetadata(url);
+      const playlistMetadataMap = {};
+      playlistMetaArray.forEach((item) => {
+        playlistMetadataMap[item.id] = item;
+      });
+      console.log(`Fetched metadata for ${playlistMetaArray.length} items in playlist.`);
+      await downloadManager.startDownload(url, format, quality, speedLimit, concurrency);
+      console.log("Playlist download complete!");
+      updateUI("Playlist download complete!");
+      await importAndRemoveDownloadedFiles(downloadManager.downloadFolder, url, playlistMetadataMap);
+    } catch (error) {
+      console.error("Playlist download failed:", error);
+      updateUI(`Playlist download failed: ${error.message}`);
     }
+  };
 
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => showTab(tab.dataset.target));
-    });
-    showTab('singleTab');
+  window.cancelDownload = () => {
+    downloadManager.cancel();
+  };
 
+  // YouTube 미리보기 함수
+  window.fetchYoutubePreview = async (url) => {
+    try {
+      const videoId = getYoutubeVideoId(url);
+      if (!videoId) throw new Error("Invalid YouTube URL");
+      const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+      const title = await getYoutubeVideoTitle(url);
+      updateYoutubePreviewUI(thumbnailUrl, title);
+    } catch (error) {
+      console.error("Error fetching YouTube preview:", error);
+      updateUI("Error fetching YouTube preview");
+    }
+  };
 
-    // 클립보드 붙여넣기 기능 (index.html 에서 script 블록에서 옮겨옴)
-    document.querySelectorAll('.paste-button').forEach(button => {
-        button.addEventListener('click', async () => {
-            try {
-                const text = await navigator.clipboard.readText();
-                const input = button.parentElement.querySelector('input');
-                input.value = text;
-                input.dispatchEvent(new Event('input')); // 입력 이벤트 발생
-            } catch (err) {
-                console.error('Failed to read clipboard:', err);
-            }
-        });
-    });
+  function getYoutubeVideoId(url) {
+    const videoIdRegex = /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/;
+    const match = url.match(videoIdRegex);
+    return match ? match[1] : null;
+  }
 
-
-    // 다운로드 상태 관리 헬퍼 (index.html 에서 script 블록에서 옮겨옴)
-    function handleDownloadState(startBtn, cancelBtn, isStarting) {
-        startBtn.disabled = isStarting;
-        if (isStarting) {
-            cancelBtn.classList.remove('hidden');
+  async function getYoutubeVideoTitle(url) {
+    return new Promise((resolve, reject) => {
+      const ytDlpProcess = spawn(downloadManager.ytDlpPath, ["--get-title", url]);
+      let title = "";
+      ytDlpProcess.stdout.on("data", (data) => {
+        title += data.toString();
+      });
+      ytDlpProcess.stderr.on("data", (data) => {
+        console.error("yt-dlp stderr:", data.toString());
+      });
+      ytDlpProcess.on("close", (code) => {
+        if (code === 0) {
+          resolve(title.trim());
         } else {
-            cancelBtn.classList.add('hidden');
+          reject(new Error(`yt-dlp exited with code ${code}`));
         }
+      });
+    });
+  }
+
+  function updateYoutubePreviewUI(thumbnailUrl, title) {
+    const youtubeThumb = document.getElementById("youtube-thumb");
+    const youtubeTitle = document.getElementById("youtube-title");
+    if (thumbnailUrl && youtubeThumb) {
+      youtubeThumb.src = thumbnailUrl;
+      youtubeThumb.classList.add("show");
     }
+    if (title && youtubeTitle) {
+      youtubeTitle.textContent = title;
+    }
+  }
 
+  // 구독 관련 함수
+  window.addSubscription = async (subscriptionData) => {
+    try {
+      await subscriptionManager.addSubscription(subscriptionData);
+      const subscriptions = await subscriptionManager.loadSubscriptions();
+      updateSubscriptionListUI(subscriptions);
+      updateUI(`Subscription added for: ${subscriptionData.url}`);
+    } catch (error) {
+      console.error("Failed to add subscription:", error);
+      updateUI(`Error: ${error.message}`);
+    }
+  };
 
-    // Single Video 다운로드 (index.html 에서 script 블록에서 옮겨옴)
-    const singleElements = {
-        url: document.getElementById('singleUrl'),
-        format: document.getElementById('formatSelect'),
-        quality: document.getElementById('qualitySelect'),
-        speedLimit: document.getElementById('speedLimitInput'),
-        concurrency: document.getElementById('concurrencyInput'),
-        downloadBtn: document.getElementById('downloadBtn'),
-        cancelBtn: document.getElementById('cancelBtn')
-    };
+  window.removeSubscription = async (url) => {
+    try {
+      await subscriptionManager.removeSubscription(url);
+      const subscriptions = await subscriptionManager.loadSubscriptions();
+      updateSubscriptionListUI(subscriptions);
+      updateUI(`Subscription removed for: ${url}`);
+    } catch (error) {
+      console.error("Failed to remove subscription:", error);
+      updateUI(`Error: ${error.message}`);
+    }
+  };
 
-    singleElements.downloadBtn.addEventListener('click', async () => {
-        const url = singleElements.url.value.trim();
-        if (!url) {
-            updateUI("Please enter a video URL.");
-            return;
-        }
+  window.loadSubscriptions = async () => {
+    const subscriptions = await subscriptionManager.loadSubscriptions();
+    updateSubscriptionListUI(subscriptions);
+    return subscriptions;
+  };
 
-        handleDownloadState(singleElements.downloadBtn, singleElements.cancelBtn, true);
-        try {
-            await downloader.startDownload( // downloader 모듈의 startDownload 함수 호출
-                url,
-                singleElements.format.value,
-                singleElements.quality.value,
-                singleElements.speedLimit.value,
-                parseInt(singleElements.concurrency.value || '1', 10)
-            );
-            updateUI("Download complete!"); // 다운로드 완료 UI 업데이트
-        } catch (e) {
-            console.error("Single download error:", e);
-            updateUI("Single download failed: " + e.message);
-        } finally {
-            handleDownloadState(singleElements.downloadBtn, singleElements.cancelBtn, false);
-        }
+  window.checkAllSubscriptions = async (progressCallback) => {
+    try {
+      await subscriptionManager.checkAllSubscriptions(progressCallback);
+      updateUI("All subscriptions checked for new videos.");
+    } catch (error) {
+      console.error("Failed to check subscriptions:", error);
+      updateUI(`Error: ${error.message}`);
+    }
+  };
 
-    });
-
-    singleElements.cancelBtn.addEventListener('click', () => {
-        downloader.cancel(); // downloader 모듈의 cancel 함수 호출
-        handleDownloadState(singleElements.downloadBtn, singleElements.cancelBtn, false);
-        updateUI("Download cancelled");
-    });
-
-
-    // Playlist 다운로드 (index.html 에서 script 블록에서 옮겨옴)
-    const playlistElements = {
-        url: document.getElementById('playlistUrl'),
-        format: document.getElementById('playlistFormat'),
-        quality: document.getElementById('playlistQuality'),
-        speedLimit: document.getElementById('playlistSpeedLimit'),
-        concurrency: document.getElementById('playlistConcurrency'),
-        downloadBtn: document.getElementById('downloadPlaylistBtn'),
-        cancelBtn: document.getElementById('cancelPlaylistBtn')
-    };
-
-    playlistElements.downloadBtn.addEventListener('click', async () => {
-        const url = playlistElements.url.value.trim();
-        if (!url) {
-            updateUI("Please enter a playlist URL.");
-            return;
-        }
-
-        handleDownloadState(playlistElements.downloadBtn, playlistElements.cancelBtn, true);
-        try {
-            await downloader.startDownload( // downloader 모듈의 startDownload 함수 호출
-                url,
-                playlistElements.format.value,
-                playlistElements.quality.value,
-                playlistElements.speedLimit.value,
-                parseInt(playlistElements.concurrency.value || '1', 10)
-            );
-            updateUI("Playlist download complete!"); // 다운로드 완료 UI 업데이트
-        } catch (err) {
-            console.error("Playlist download error:", err);
-            updateUI("Playlist download failed: " + err.message);
-        } finally {
-            handleDownloadState(playlistElements.downloadBtn, playlistElements.cancelBtn, false);
-        }
-    });
-
-    playlistElements.cancelBtn.addEventListener('click', () => {
-        downloader.cancel(); // downloader 모듈의 cancel 함수 호출
-        handleDownloadState(playlistElements.downloadBtn, playlistElements.cancelBtn, false);
-        updateUI("Download cancelled");
-    });
-
-
-    // ... (subscription 관련 UI 코드는 ui.js 로 옮겨오되, downloader 와 분리된 별도 모듈로 추후 구현 예정이므로, ui.js 에서는 일단 주석 처리하거나 최소한의 UI 관련 코드만 남겨둠) ...
-
-});
+  // (추가적으로 탭 전환 등 UI 이벤트 바인딩은 여기서 처리하시면 됩니다.)
+}
