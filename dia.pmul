@@ -1,31 +1,36 @@
 @startuml
 skinparam componentStyle rectangle
 
-package "Eagle Plugin" {
-  [index.html] <<HTML>> as UI
-  [plugin.js] <<JavaScript>> as Plugin
-  [manifest.json] <<JSON>> as Manifest
-  folder "downloads" as Downloads
-}
-
 package "Eagle App" {
-  [Eagle API] as EagleAPI
+  [Eagle API]
 }
 
-package "External" {
-  [YouTube] as YT
-  [Other Video Sites] as OVS
-  [FFmpeg] as FFMPEG
-  [yt-dlp.exe] as YTDLP
+package "User Interface" {
+  [index.html] <<HTML>>
 }
 
-UI -- Plugin : User Interaction
-Plugin -- Manifest : Reads Config
-Plugin -- Downloads : Saves Files
-Plugin -- EagleAPI : Interacts (Add Item, Create Folder)
-Plugin -- YTDLP : Spawns Process
-YTDLP -- YT : Fetches Video & Metadata
-YTDLP -- OVS : Fetches Video & Metadata
-YTDLP -- FFMPEG: Uses for processing
+package "Plugin Logic" {
+  [plugin.js] <<JavaScript>>
+  [DownloadManager] <<Class>>
+  [SubscriptionManager] <<Class>>
+}
+
+package "External Tools" {
+  [yt-dlp.exe] <<Executable>>
+  [FFmpeg] <<Executable>>
+}
+
+package "Database" {
+  [subscriptions.json] <<File>>
+}
+
+[index.html] -- [plugin.js] : Interacts via window functions
+[plugin.js] -- [DownloadManager] : Uses
+[plugin.js] -- [SubscriptionManager] : Uses
+[plugin.js] -- [Eagle API] : Interacts
+[DownloadManager] -- [yt-dlp.exe] : Executes
+[DownloadManager] -- [FFmpeg] : Uses
+[SubscriptionManager] -- [subscriptions.json] : Reads/Writes
+[yt-dlp.exe] -- [YouTube] : Downloads from
 
 @enduml
