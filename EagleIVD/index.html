@@ -125,14 +125,30 @@
 
     <!-- Subscriptions Tab -->
     <div id="subscriptionTab" class="tab-content hidden">
-      <!-- 재생목록 추가 폼 -->
+      <!-- 구독 추가 폼 -->
       <div class="bg-gray-50 p-4 rounded mb-4">
         <h3 class="font-bold mb-2">Add New Subscription</h3>
+        
+        <!-- 구독 유형 선택 -->
         <div class="mb-2">
-          <label class="font-semibold">Playlist URL</label>
+          <label class="font-semibold">Subscription Type</label>
+          <div class="flex gap-2 mt-1">
+            <label class="flex items-center">
+              <input type="radio" name="subType" value="playlist" checked class="mr-1">
+              Playlist
+            </label>
+            <label class="flex items-center">
+              <input type="radio" name="subType" value="channel" class="mr-1">
+              Channel
+            </label>
+          </div>
+        </div>
+        
+        <div class="mb-2">
+          <label class="font-semibold">URL</label>
           <div class="input-wrapper">
             <input type="text" id="newSubUrl" class="border p-2 w-full pr-24" 
-              placeholder="https://youtube.com/playlist?list=...">
+              placeholder="https://youtube.com/playlist?list=... or https://youtube.com/channel/...">
             <button class="paste-button bg-gray-200 px-2 py-1 rounded text-sm">Paste</button>
           </div>
         </div>
@@ -165,16 +181,25 @@
       <div class="mb-4">
         <div class="flex justify-between items-center mb-2">
           <h3 class="font-bold">My Subscriptions</h3>
-          <button id="checkNewBtn" class="bg-blue-500 text-white px-4 py-2 rounded flex items-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/>
-            </svg>
-            Check New Videos
-          </button>
+          <div class="flex gap-2">
+            <button id="checkNewBtn" class="bg-blue-500 text-white px-4 py-2 rounded flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/>
+              </svg>
+              Check New Videos
+            </button>
+            <button id="startAutoCheckBtn" class="bg-green-500 text-white px-4 py-2 rounded">
+              Start Auto Check
+            </button>
+            <button id="stopAutoCheckBtn" class="bg-orange-500 text-white px-4 py-2 rounded hidden">
+              Stop Auto Check
+            </button>
+          </div>
         </div>
 
-        <div id="subscriptionList" class="subscription-list divide-y">
+        <div id="subscriptionList" class="subscription-list divide-y border rounded">
           <!-- 구독 항목들이 동적으로 추가됨 -->
+          <div class="p-3 text-gray-500 text-center">No subscriptions yet</div>
         </div>
       </div>
 
@@ -368,8 +393,11 @@
       newFolder: document.getElementById('newSubFolder'),
       newFormat: document.getElementById('newSubFormat'),
       newQuality: document.getElementById('newSubQuality'),
+      subTypeRadios: document.getElementsByName('subType'),
       addBtn: document.getElementById('addSubscriptionBtn'),
       checkNewBtn: document.getElementById('checkNewBtn'),
+      startAutoCheckBtn: document.getElementById('startAutoCheckBtn'),
+      stopAutoCheckBtn: document.getElementById('stopAutoCheckBtn'),
       cancelBtn: document.getElementById('cancelSubscriptionBtn'),
       list: document.getElementById('subscriptionList'),
       progress: document.getElementById('downloadProgress'),
@@ -377,71 +405,78 @@
       progressBar: document.getElementById('progressBar')
     };
 
-    // 구독 목록 UI 업데이트
-    function updateSubscriptionList(subscriptions) {
-      const list = subscriptionElements.list;
-      list.innerHTML = '';
+    // 자동 체크 시작/중지 버튼
+    subscriptionElements.startAutoCheckBtn.addEventListener('click', () => {
+      if (window.startAutoCheck) {
+        window.startAutoCheck(60); // 60분마다 체크
+        subscriptionElements.startAutoCheckBtn.classList.add('hidden');
+        subscriptionElements.stopAutoCheckBtn.classList.remove('hidden');
+        updateUI("Auto-check started (every 60 minutes)");
+      }
+    });
 
-      subscriptions.forEach(sub => {
-        const item = document.createElement('div');
-        item.className = 'subscription-item p-3 flex justify-between items-center';
-        
-        const info = document.createElement('div');
-        info.innerHTML = `
-          <div class="font-semibold">${sub.title || 'Untitled Playlist'}</div>
-          <div class="text-sm text-gray-500">
-            Folder: ${sub.folderName || 'Default'} | Format: ${sub.format} ${sub.quality || ''}
-          </div>
-        `;
-
-        const controls = document.createElement('div');
-        controls.className = 'flex items-center gap-2';
-        
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'text-red-500 hover:text-red-700';
-        deleteBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
-          </svg>
-        `;
-        deleteBtn.onclick = () => {
-          if (window.removeSubscription) {
-            window.removeSubscription(sub.url);
-          }
-        };
-
-        controls.appendChild(deleteBtn);
-        item.appendChild(info);
-        item.appendChild(controls);
-        list.appendChild(item);
-      });
-    }
+    subscriptionElements.stopAutoCheckBtn.addEventListener('click', () => {
+      if (window.stopAutoCheck) {
+        window.stopAutoCheck();
+        subscriptionElements.startAutoCheckBtn.classList.remove('hidden');
+        subscriptionElements.stopAutoCheckBtn.classList.add('hidden');
+        updateUI("Auto-check stopped");
+      }
+    });
 
     // 구독 추가 버튼
     subscriptionElements.addBtn.addEventListener('click', async () => {
       const url = subscriptionElements.newUrl.value.trim();
       if (!url) {
-        updateUI("Please enter a playlist URL.");
+        updateUI("Please enter a valid URL.");
         return;
       }
 
-      if (window.addSubscription) {
-        try {
-          await window.addSubscription({
-            url,
-            folderName: subscriptionElements.newFolder.value.trim(),
-            format: subscriptionElements.newFormat.value,
-            quality: subscriptionElements.newQuality.value
-          });
+      // 구독 유형 확인
+      const isChannel = Array.from(subscriptionElements.subTypeRadios)
+        .find(radio => radio.checked)?.value === 'channel';
 
-          // 입력 폼 초기화
-          subscriptionElements.newUrl.value = '';
-          subscriptionElements.newFolder.value = '';
-          
-          updateUI("Subscription added successfully!");
-        } catch (err) {
-          console.error("Failed to add subscription:", err);
-          updateUI("Failed to add subscription: " + err.message);
+      if (isChannel) {
+        // 채널 구독 추가
+        if (window.addChannelSubscription) {
+          try {
+            await window.addChannelSubscription({
+              url,
+              folderName: subscriptionElements.newFolder.value.trim(),
+              format: subscriptionElements.newFormat.value,
+              quality: subscriptionElements.newQuality.value
+            });
+            
+            // 입력 폼 초기화
+            subscriptionElements.newUrl.value = '';
+            subscriptionElements.newFolder.value = '';
+            
+            updateUI("Channel subscription added successfully!");
+          } catch (err) {
+            console.error("Failed to add channel subscription:", err);
+            updateUI("Failed to add channel subscription: " + err.message);
+          }
+        }
+      } else {
+        // 플레이리스트 구독 추가
+        if (window.addSubscription) {
+          try {
+            await window.addSubscription({
+              url,
+              folderName: subscriptionElements.newFolder.value.trim(),
+              format: subscriptionElements.newFormat.value,
+              quality: subscriptionElements.newQuality.value
+            });
+            
+            // 입력 폼 초기화
+            subscriptionElements.newUrl.value = '';
+            subscriptionElements.newFolder.value = '';
+            
+            updateUI("Playlist subscription added successfully!");
+          } catch (err) {
+            console.error("Failed to add subscription:", err);
+            updateUI("Failed to add subscription: " + err.message);
+          }
         }
       }
     });
