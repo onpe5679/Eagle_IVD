@@ -1,11 +1,44 @@
 [
   {
-    "url": "https://www.youtube.com/playlist?list=PLTwZvCJabx0c_cPV97DnCMpTWmMxmmiBd",
+    "url": "https://youtube.com/playlist?list=PLTwZvCJabx0d9oR4ztkspQqHtgKzNFXHI&si=c8IClGIoXa_9c6sd",
     "folderName": "",
     "format": "best",
     "quality": "",
-    "lastCheckedVideoId": "uI9WfIkybAc",
+    "videoIds": [
+      "BiD7u0Svsvk",
+      "0XGAV1weF00",
+      "tXV6ljvZrrI"
+    ],
+    "title": "테스트1",
+    "lastCheck": 1744815782932
+  },
+  {
+    "url": "https://youtube.com/playlist?list=PLTwZvCJabx0c_cPV97DnCMpTWmMxmmiBd&si=AHpMgjwGfjDP9FMN",
+    "folderName": "",
+    "format": "best",
+    "quality": "",
+    "videoIds": [
+      "IGqABlNrpyE",
+      "uI9WfIkybAc",
+      "wfCdB98dJPQ",
+      "r9VRm5DNowU",
+      "uLMRTvRrvYg",
+      "GCKSrC6XVOk"
+    ],
     "title": "일페",
-    "lastCheck": 1744726318719
+    "lastCheck": 1744815963070
+  },
+  {
+    "url": "https://youtube.com/playlist?list=PLTwZvCJabx0ciqrDqRIORedDg-wsw2PR1&si=kNLFMpSWAtQlAJmn",
+    "folderName": "",
+    "format": "best",
+    "quality": "",
+    "videoIds": [
+      "XC_zEpo0_Ms",
+      "HQCwbP5twzY",
+      "73stcwZC9vk"
+    ],
+    "title": "s2",
+    "lastCheck": 1744815991257
   }
 ]
