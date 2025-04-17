@@ -51,7 +51,6 @@
     <!-- 탭 메뉴 -->
     <div class="flex space-x-4 border-b pb-2 mb-4">
       <button class="tab-button font-bold" data-target="singleTab">Single Video</button>
-      <button class="tab-button" data-target="playlistTab">Playlist</button>
       <button class="tab-button" data-target="subscriptionTab">Subscriptions</button>
     </div>
 
@@ -94,50 +93,6 @@
       </div>
       <button id="downloadBtn" class="bg-blue-500 text-white px-4 py-2 rounded">Download Video</button>
       <button id="cancelBtn" class="bg-red-500 text-white px-4 py-2 rounded hidden">Cancel</button>
-    </div>
-
-    <!-- Playlist Tab -->
-    <div id="playlistTab" class="tab-content hidden">
-      <div class="mb-2">
-        <label class="font-semibold">Playlist URL</label>
-        <div class="input-wrapper">
-          <input type="text" id="playlistUrl" class="border p-2 w-full pr-24" placeholder="https://youtube.com/playlist?list=...">
-          <button class="paste-button bg-gray-200 px-2 py-1 rounded text-sm">Paste</button>
-        </div>
-      </div>
-      
-      <!-- 플레이리스트 미리보기 영역 -->
-      <div id="playlist-preview" class="mb-3 border rounded p-2 flex items-center gap-3 bg-gray-50" style="display: none;">
-        <img id="playlist-thumb" src="" class="w-24 h-auto" alt="Playlist Thumbnail">
-        <div>
-          <h4 id="playlist-title" class="font-medium"></h4>
-          <p id="playlist-count" class="text-sm text-gray-500"></p>
-        </div>
-      </div>
-      
-      <div class="mb-2 flex gap-2">
-        <label>Format</label>
-        <select id="playlistFormat" class="border p-1">
-          <option value="best">Best</option>
-          <option value="mp4">MP4</option>
-          <option value="mp3">MP3</option>
-        </select>
-        <label>Quality</label>
-        <select id="playlistQuality" class="border p-1">
-          <option value="">Auto</option>
-          <option value="1080">1080p</option>
-          <option value="720">720p</option>
-          <option value="480">480p</option>
-        </select>
-      </div>
-      <div class="mb-2 flex gap-2">
-        <label>Speed Limit (KB/s)</label>
-        <input type="number" id="playlistSpeedLimit" class="border p-1 w-20">
-        <label>Concurrency (-N)</label>
-        <input type="number" id="playlistConcurrency" class="border p-1 w-12">
-      </div>
-      <button id="downloadPlaylistBtn" class="bg-green-500 text-white px-4 py-2 rounded">Download Playlist</button>
-      <button id="cancelPlaylistBtn" class="bg-red-500 text-white px-4 py-2 rounded hidden">Cancel</button>
     </div>
 
     <!-- Subscriptions Tab -->
@@ -192,6 +147,45 @@
         <button id="addSubscriptionBtn" class="bg-green-500 text-white px-4 py-2 rounded">
           Add Subscription
         </button>
+      </div>
+
+      <!-- 구독 설정 -->
+      <div class="bg-gray-50 p-4 rounded mb-4">
+        <h3 class="font-bold mb-2">Download Settings</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="font-semibold block mb-1">Metadata Batch Size</label>
+            <div class="flex items-center">
+              <input type="number" id="metadataBatchSize" class="border p-2 w-full" value="30" min="5" max="100">
+              <span class="ml-2 text-sm text-gray-500">영상/배치</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">메타데이터 배치 크기 (기본값: 30) - 값이 클수록 메모리 사용량이 증가합니다</p>
+          </div>
+          <div>
+            <label class="font-semibold block mb-1">Download Batch Size</label>
+            <div class="flex items-center">
+              <input type="number" id="downloadBatchSize" class="border p-2 w-full" value="5" min="1" max="20">
+              <span class="ml-2 text-sm text-gray-500">영상/배치</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">동시 다운로드 수 (기본값: 5) - 값이 클수록 네트워크 부하가 증가합니다</p>
+          </div>
+          <div>
+            <label class="font-semibold block mb-1">Concurrent Playlists</label>
+            <div class="flex items-center">
+              <input type="number" id="concurrentPlaylists" class="border p-2 w-full" value="3" min="1" max="10">
+              <span class="ml-2 text-sm text-gray-500">구독/배치</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">동시 처리할 구독 수 (기본값: 3) - 값이 클수록 시스템 부하가 증가합니다</p>
+          </div>
+          <div>
+            <label class="font-semibold block mb-1">Rate Limit</label>
+            <div class="flex items-center">
+              <input type="number" id="rateLimit" class="border p-2 w-full" value="0" min="0" step="50">
+              <span class="ml-2 text-sm text-gray-500">KB/s (0=무제한)</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">다운로드 속도 제한 (0=무제한) - 네트워크 혼잡 방지용</p>
+          </div>
+        </div>
       </div>
 
       <!-- 구독 목록 -->

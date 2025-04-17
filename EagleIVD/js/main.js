@@ -245,36 +245,79 @@ eagle.onPluginCreate(async (plugin) => {
     return subscriptions;
   };
 
-  // 모든 구독 확인 함수
-  window.checkAllSubscriptions = async (progressCallback) => {
+  // 구독 확인 기능
+  window.checkAllSubscriptions = async () => {
     try {
+      // 설정 값 읽기
+      const metadataBatchSize = parseInt(document.getElementById('metadataBatchSize').value) || 30;
+      const downloadBatchSize = parseInt(document.getElementById('downloadBatchSize').value) || 5;
+      const concurrency = parseInt(document.getElementById('concurrentPlaylists').value) || 3;
+      const rateLimit = parseInt(document.getElementById('rateLimit').value) || 0;
+      
+      // 설정 값 로그
+      console.log("구독 확인 옵션:", {
+        metadataBatchSize,
+        downloadBatchSize,
+        concurrency,
+        rateLimit
+      });
+      
+      // 진행 상황 표시 업데이트
+      document.getElementById("downloadProgress").classList.remove("hidden");
+      
+      // 프로그레스 콜백 함수
       const wrappedCallback = (current, total, task) => {
-        if (progressCallback) {
-          progressCallback(current, total, task);
-        }
         uiController.updateProgressUI(current, total, task);
       };
       
-      await subscriptionManager.checkAllSubscriptions(wrappedCallback);
-      uiController.updateStatusUI("All subscriptions checked for new videos.");
+      // 구독 확인 실행
+      await subscriptionManager.checkAllSubscriptions(wrappedCallback, {
+        concurrency,
+        metadataBatchSize,
+        downloadBatchSize,
+        rateLimit
+      });
+      
+      // 진행 상황 표시 숨김
+      document.getElementById("downloadProgress").classList.add("hidden");
     } catch (error) {
       console.error("Failed to check subscriptions:", error);
-      uiController.showError(error.message);
+      uiController.showError(`Failed to check subscriptions: ${error.message}`);
+      document.getElementById("downloadProgress").classList.add("hidden");
     }
   };
-
-  // 자동 체크 시작 함수
-  window.startAutoCheck = (intervalMinutes) => {
-    subscriptionManager.startAutoCheck(intervalMinutes);
-    uiController.updateAutoCheckButtonsState(true);
-    uiController.updateStatusUI(`Auto checking started (every ${intervalMinutes} minutes)`);
+  
+  // 자동 체크 시작
+  window.startAutoCheck = async (intervalMinutes) => {
+    try {
+      // 현재 설정 값으로 자동 체크 시작
+      const metadataBatchSize = parseInt(document.getElementById('metadataBatchSize').value) || 30;
+      const downloadBatchSize = parseInt(document.getElementById('downloadBatchSize').value) || 5;
+      const concurrency = parseInt(document.getElementById('concurrentPlaylists').value) || 3;
+      const rateLimit = parseInt(document.getElementById('rateLimit').value) || 0;
+      
+      // 자동 체크 시작
+      subscriptionManager.startAutoCheck(intervalMinutes);
+      
+      // 버튼 상태 업데이트
+      uiController.updateAutoCheckButtonsState(true);
+      uiController.updateStatusUI(`자동 확인 시작됨 (${intervalMinutes}분 간격)`);
+    } catch (error) {
+      console.error("Failed to start auto check:", error);
+      uiController.showError(`Failed to start auto check: ${error.message}`);
+    }
   };
-
-  // 자동 체크 중지 함수
+  
+  // 자동 체크 중지
   window.stopAutoCheck = () => {
-    subscriptionManager.stopAutoCheck();
-    uiController.updateAutoCheckButtonsState(false);
-    uiController.updateStatusUI("Auto checking stopped");
+    try {
+      subscriptionManager.stopAutoCheck();
+      uiController.updateAutoCheckButtonsState(false);
+      uiController.updateStatusUI("자동 확인 중지됨");
+    } catch (error) {
+      console.error("Failed to stop auto check:", error);
+      uiController.showError(`Failed to stop auto check: ${error.message}`);
+    }
   };
 
   // UI 초기화 함수

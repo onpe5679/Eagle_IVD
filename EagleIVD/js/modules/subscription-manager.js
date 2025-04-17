@@ -125,16 +125,33 @@ class SubscriptionManager extends EventEmitter {
   /**
    * 모든 구독 확인 및 새 비디오 다운로드
    * @param {Function} progressCallback - 진행 상황 콜백 함수
-   * @param {number} concurrency - 동시 처리할 최대 구독 수 (기본값: 3)
+   * @param {Object} options - 다운로드 옵션
+   * @param {number} options.concurrency - 동시 처리할 최대 구독 수 (기본값: 3)
+   * @param {number} options.metadataBatchSize - 메타데이터 배치 크기 (기본값: 30)
+   * @param {number} options.downloadBatchSize - 다운로드 배치 크기 (기본값: 5)
+   * @param {number} options.rateLimit - 다운로드 속도 제한 (KB/s, 0=무제한)
    * @returns {Promise<void>}
    */
-  async checkAllSubscriptions(progressCallback, concurrency = 3) {
+  async checkAllSubscriptions(progressCallback, options = {}) {
     if (this.isChecking) {
       console.log("Already checking subscriptions. Please wait.");
       return;
     }
 
-    console.log("Checking for new videos in subscribed playlists...");
+    const {
+      concurrency = 3,
+      metadataBatchSize = 30,
+      downloadBatchSize = 5,
+      rateLimit = 0
+    } = options;
+
+    console.log("Checking for new videos with options:", { 
+      concurrency, 
+      metadataBatchSize, 
+      downloadBatchSize, 
+      rateLimit 
+    });
+    
     this.isChecking = true;
     const total = this.subscriptions.length;
     
@@ -155,7 +172,8 @@ class SubscriptionManager extends EventEmitter {
               sub, 
               total - subscriptions.length - batch.length + index + 1, 
               total, 
-              progressCallback
+              progressCallback,
+              { metadataBatchSize, downloadBatchSize, rateLimit }
             );
           });
           
@@ -185,12 +203,22 @@ class SubscriptionManager extends EventEmitter {
    * @param {number} current - 현재 진행 중인 구독 인덱스
    * @param {number} total - 전체 구독 수
    * @param {Function} progressCallback - 진행 상황 콜백 함수
+   * @param {Object} options - 다운로드 옵션
+   * @param {number} options.metadataBatchSize - 메타데이터 배치 크기 (기본값: 30)
+   * @param {number} options.downloadBatchSize - 다운로드 배치 크기 (기본값: 5)
+   * @param {number} options.rateLimit - 다운로드 속도 제한 (KB/s, 0=무제한)
    * @returns {Promise<object>} 구독 확인 결과 객체
    */
-  async checkSubscription(sub, current, total, progressCallback) {
+  async checkSubscription(sub, current, total, progressCallback, options = {}) {
     if (!this.isChecking) {
       return { subscription: sub, newVideos: 0, error: null };
     }
+
+    const {
+      metadataBatchSize = 30,
+      downloadBatchSize = 5,
+      rateLimit = 0
+    } = options;
     
     if (progressCallback) {
       progressCallback(
@@ -300,13 +328,12 @@ class SubscriptionManager extends EventEmitter {
         console.log(`임시 폴더 생성됨: ${tempFolder}`);
         
         // Phase 2: 새 영상의 자세한 메타데이터 취득 (다운로드 없이)
-        // 새 영상 URL 목록 구성 (100개 단위로 처리)
+        // 새 영상 URL 목록 구성 (metadataBatchSize 단위로 처리)
         const videoUrlBatches = [];
-        const batchSize = 30; // 한 번에 처리할 영상 수 조정
         
-        for (let i = 0; i < newVideoIds.length; i += batchSize) {
+        for (let i = 0; i < newVideoIds.length; i += metadataBatchSize) {
           videoUrlBatches.push(
-            newVideoIds.slice(i, i + batchSize).map(id => `https://www.youtube.com/watch?v=${id}`)
+            newVideoIds.slice(i, i + metadataBatchSize).map(id => `https://www.youtube.com/watch?v=${id}`)
           );
         }
         
@@ -383,8 +410,7 @@ class SubscriptionManager extends EventEmitter {
         // Phase 3: 실제 다운로드 (새 영상만)
         this.updateStatusUI(`${sub.title || sub.url}: ${downloadedVideoIds.length}개 영상 다운로드 시작`);
         
-        // 영상을 동시에 10개씩 나누어 다운로드 (메모리 효율적)
-        const downloadBatchSize = 5;
+        // 영상을 downloadBatchSize 단위로 나누어 다운로드
         const downloadedFiles = [];
         
         for (let i = 0; i < downloadedVideoIds.length; i += downloadBatchSize) {
@@ -400,6 +426,11 @@ class SubscriptionManager extends EventEmitter {
             "--no-warnings",
             "--newline"
           ];
+
+          // 속도 제한 적용
+          if (rateLimit > 0) {
+            phase3Args.push("--limit-rate", `${rateLimit}K`);
+          }
 
           // 포맷 및 품질 설정 추가
           if (sub.format === "mp3") {
