@@ -125,9 +125,10 @@ class SubscriptionManager extends EventEmitter {
   /**
    * 모든 구독 확인 및 새 비디오 다운로드
    * @param {Function} progressCallback - 진행 상황 콜백 함수
+   * @param {number} concurrency - 동시 처리할 최대 구독 수 (기본값: 3)
    * @returns {Promise<void>}
    */
-  async checkAllSubscriptions(progressCallback) {
+  async checkAllSubscriptions(progressCallback, concurrency = 3) {
     if (this.isChecking) {
       console.log("Already checking subscriptions. Please wait.");
       return;
@@ -136,116 +137,209 @@ class SubscriptionManager extends EventEmitter {
     console.log("Checking for new videos in subscribed playlists...");
     this.isChecking = true;
     const total = this.subscriptions.length;
-    let current = 0;
-
+    
     try {
-      for (const sub of this.subscriptions) {
-        if (!this.isChecking) {
-          console.log("Cancelled checkAllSubscriptions");
-          return;
-        }
-        current++;
-
-        const playlistId = this.getPlaylistId(sub.url);
-        const tempFolder = path.join(
-          this.downloadManager.downloadFolder,
-          "subscription_" + playlistId
-        );
-
-        try {
-          // 폴더 생성 시도
-          await fs.mkdir(tempFolder, { recursive: true });
-          console.log(`Temp folder created or already exists: ${tempFolder}`);
-
-          if (progressCallback) {
-            progressCallback(
-              current,
-              total,
-              `Checking playlist: ${sub.title || sub.url}`
+      // 구독 목록을 배열로 복사
+      const subscriptions = [...this.subscriptions];
+      const results = [];
+      
+      // 병렬 처리를 위한 함수
+      const processInBatches = async () => {
+        // concurrency 단위로 처리할 배치 생성
+        while (subscriptions.length > 0 && this.isChecking) {
+          const batch = subscriptions.splice(0, concurrency);
+          
+          // 배치 내의 구독을 병렬로 처리
+          const batchPromises = batch.map((sub, index) => {
+            return this.checkSubscription(
+              sub, 
+              total - subscriptions.length - batch.length + index + 1, 
+              total, 
+              progressCallback
             );
-          }
+          });
+          
+          // 현재 배치의 모든 작업이 완료될 때까지 대기
+          const batchResults = await Promise.all(batchPromises);
+          results.push(...batchResults);
+        }
+      };
+      
+      await processInBatches();
+      
+      // 결과 요약
+      const newVideosCount = results.filter(r => r.newVideos > 0).length;
+      console.log(`Checked ${total} subscriptions, found new videos in ${newVideosCount} playlists.`);
+      this.updateStatusUI(`구독 확인 완료: ${total}개 중 ${newVideosCount}개에서 새 영상 발견`);
+      
+    } finally {
+      this.isChecking = false;
+      console.log("Finished checking all subscriptions.");
+      this.emit('checkComplete');
+    }
+  }
 
-          // Phase 1: 재생목록의 전체 영상 ID와 메타데이터 조회 (다운로드 없이)
-          const phase1Args = [
+  /**
+   * 개별 구독 확인 및 다운로드
+   * @param {object} sub - 구독 정보
+   * @param {number} current - 현재 진행 중인 구독 인덱스
+   * @param {number} total - 전체 구독 수
+   * @param {Function} progressCallback - 진행 상황 콜백 함수
+   * @returns {Promise<object>} 구독 확인 결과 객체
+   */
+  async checkSubscription(sub, current, total, progressCallback) {
+    if (!this.isChecking) {
+      return { subscription: sub, newVideos: 0, error: null };
+    }
+    
+    if (progressCallback) {
+      progressCallback(
+        current,
+        total,
+        `플레이리스트 확인 중: ${sub.title || sub.url}`
+      );
+    }
+    
+    try {
+      // Phase 1: 경량화된 메타데이터만 먼저 확인 (최적화된 방식)
+      const phase1Args = [
+        "--skip-download",
+        "--flat-playlist",  // 경량화된 플레이리스트 정보만 가져오기
+        "--print-json",
+        "--no-warnings",
+        sub.url
+      ];
+      
+      let fetchedVideoIds = [];
+      let playlistMetadata = null;
+      
+      await new Promise((resolve, reject) => {
+        const phase1Process = spawn(this.downloadManager.ytDlpPath, phase1Args);
+        
+        let buffer = '';
+        phase1Process.stdout.on("data", (data) => {
+          // 스트림 데이터를 버퍼에 축적
+          buffer += data.toString();
+          
+          // 완전한 JSON 객체가 포함된 라인만 처리
+          const lines = buffer.split("\n");
+          // 마지막 라인은 불완전할 수 있으므로 버퍼에 다시 저장
+          buffer = lines.pop() || '';
+          
+          // 완전한 라인 처리
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            
+            try {
+              if (line.startsWith("{")) {
+                const item = JSON.parse(line);
+                
+                if (!playlistMetadata) {
+                  playlistMetadata = item;
+                }
+                
+                // 확실한 ID 정보만 추출
+                if (item.id) {
+                  fetchedVideoIds.push(item.id);
+                }
+              }
+            } catch (e) {
+              console.error("Phase1 JSON parse error:", e);
+            }
+          }
+        });
+        
+        phase1Process.stderr.on("data", (data) => {
+          console.error("Phase1 yt-dlp stderr:", data.toString());
+        });
+        
+        phase1Process.on("close", (code) => {
+          // 남은 버퍼 처리
+          if (buffer.trim()) {
+            try {
+              const item = JSON.parse(buffer);
+              if (item.id && !fetchedVideoIds.includes(item.id)) {
+                fetchedVideoIds.push(item.id);
+              }
+            } catch (e) {
+              console.error("Buffer JSON parse error:", e);
+            }
+          }
+          
+          if (code === 0 || code === null) {
+            resolve();
+          } else {
+            reject(new Error(`Phase1: yt-dlp exited with code ${code}`));
+          }
+        });
+      });
+      
+      // 새 비디오 ID 필터링 (메모리 효율적 방식)
+      const videoIdSet = new Set(sub.videoIds); // O(1) 조회를 위한 Set 사용
+      const newVideoIds = fetchedVideoIds.filter(id => !videoIdSet.has(id));
+      
+      console.log(`플레이리스트 ${sub.title || sub.url}: 총 ${fetchedVideoIds.length}개 중 ${newVideoIds.length}개 새 영상 발견`);
+      
+      if (newVideoIds.length === 0) {
+        this.updateStatusUI(`${sub.title || sub.url}: 새 영상 없음`);
+        return { subscription: sub, newVideos: 0, error: null };
+      }
+      
+      this.updateStatusUI(`${sub.title || sub.url}: ${newVideoIds.length}개의 새 영상 발견`);
+      
+      // 새 영상이 있을 때만 임시 폴더 생성
+      const playlistId = this.getPlaylistId(sub.url);
+      const tempFolder = path.join(
+        this.downloadManager.downloadFolder,
+        "subscription_" + playlistId
+      );
+      
+      try {
+        // 폴더 생성 시도
+        await fs.mkdir(tempFolder, { recursive: true });
+        console.log(`임시 폴더 생성됨: ${tempFolder}`);
+        
+        // Phase 2: 새 영상의 자세한 메타데이터 취득 (다운로드 없이)
+        // 새 영상 URL 목록 구성 (100개 단위로 처리)
+        const videoUrlBatches = [];
+        const batchSize = 30; // 한 번에 처리할 영상 수 조정
+        
+        for (let i = 0; i < newVideoIds.length; i += batchSize) {
+          videoUrlBatches.push(
+            newVideoIds.slice(i, i + batchSize).map(id => `https://www.youtube.com/watch?v=${id}`)
+          );
+        }
+        
+        const downloadedVideoIds = [];
+        const downloadedMetadata = {};
+        
+        // 새 영상 메타데이터 일괄 처리
+        for (let i = 0; i < videoUrlBatches.length; i++) {
+          const batchUrls = videoUrlBatches[i];
+          this.updateStatusUI(`${sub.title || sub.url}: 새 영상 메타데이터 가져오는 중 (${i+1}/${videoUrlBatches.length})`);
+          
+          // 메타데이터 가져오기 (배치 단위)
+          const metadataArgs = [
             "--skip-download",
             "--print-json",
-            sub.url
-          ];
-          let fetchedVideoIds = [];
-          let playlistMetadata = null;
-          await new Promise((resolve, reject) => {
-            const phase1Process = spawn(this.downloadManager.ytDlpPath, phase1Args);
-            phase1Process.stdout.on("data", (data) => {
-              const lines = data.toString().split("\n").filter(line => line.trim());
-              lines.forEach(line => {
-                try {
-                  const item = JSON.parse(line);
-                  if (!playlistMetadata) {
-                    playlistMetadata = item;
-                  }
-                  if (item.id) {
-                    fetchedVideoIds.push(item.id);
-                  }
-                } catch (e) {
-                  console.error("Phase1 JSON parse error:", e);
-                }
-              });
-            });
-            phase1Process.stderr.on("data", (data) => {
-              console.error("Phase1 yt-dlp stderr:", data.toString());
-            });
-            phase1Process.on("close", (code) => {
-              if (code === 0 || code === null) {
-                resolve();
-              } else {
-                reject(new Error(`Phase1: yt-dlp exited with code ${code}`));
-              }
-            });
-          });
-
-          const newVideoIds = fetchedVideoIds.filter(id => !sub.videoIds.includes(id));
-          if (newVideoIds.length === 0) {
-            this.updateStatusUI(`No new videos found in playlist ${sub.title || sub.url}`);
-            continue; // 다음 구독으로 넘어감
-          }
-
-          // Phase 2: 새 영상만 다운로드하도록 기존 videoIds와 다른 ID 필터링
-          // 새 영상 ID만 포함하는 URL 생성
-          const videoUrls = newVideoIds.map(id => `https://www.youtube.com/watch?v=${id}`);
-          
-          const phase2Args = [
-            "--ffmpeg-location", this.downloadManager.ffmpegPath,
-            "--print-json",
-            "-o", `${tempFolder}/%(id)s_%(title)s.%(ext)s`,
-            "--progress",
             "--no-warnings",
-            "--newline"
+            "--newline",
+            ...batchUrls
           ];
-
-          // 포맷 및 품질 설정 추가
-          if (sub.format === "mp3") {
-            phase2Args.push("-x", "--audio-format", "mp3");
-          } else if (sub.format === "best") {
-            phase2Args.push("-f", "bv*+ba/b");
-          } else {
-            let formatString = sub.format;
-            if (sub.quality) {
-              formatString += `-${sub.quality}`;
-            }
-            phase2Args.push("-f", formatString);
-          }
-
-          // 각 영상 URL을 phase2Args에 추가
-          phase2Args.push(...videoUrls);
-          
-          let downloadedVideoIds = [];
-          let downloadedMetadata = {};
           
           await new Promise((resolve, reject) => {
-            const phase2Process = spawn(this.downloadManager.ytDlpPath, phase2Args);
-            phase2Process.stdout.on("data", (data) => {
-              const lines = data.toString().split("\n").filter(line => line.trim());
-              lines.forEach(line => {
+            const metadataProcess = spawn(this.downloadManager.ytDlpPath, metadataArgs);
+            let metaBuffer = '';
+            
+            metadataProcess.stdout.on("data", (data) => {
+              metaBuffer += data.toString();
+              
+              const lines = metaBuffer.split("\n");
+              metaBuffer = lines.pop() || '';
+              
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                
                 try {
                   if (line.startsWith("{")) {
                     const item = JSON.parse(line);
@@ -255,64 +349,138 @@ class SubscriptionManager extends EventEmitter {
                     }
                   }
                 } catch (e) {
-                  console.error("Phase2 JSON parse error:", e);
+                  console.error("Metadata JSON parse error:", e);
                 }
-              });
-              this.updateProgress(data.toString());
+              }
             });
             
-            phase2Process.stderr.on("data", (data) => {
-              console.error("Phase2 yt-dlp stderr:", data.toString());
-              this.updateStatusUI(`Error: ${data.toString().trim()}`);
+            metadataProcess.stderr.on("data", (data) => {
+              console.error("Metadata yt-dlp stderr:", data.toString());
             });
             
-            phase2Process.on("close", async (code) => {
+            metadataProcess.on("close", (code) => {
+              if (metaBuffer.trim()) {
+                try {
+                  const item = JSON.parse(metaBuffer);
+                  if (item.id && !downloadedVideoIds.includes(item.id)) {
+                    downloadedVideoIds.push(item.id);
+                    downloadedMetadata[item.id] = item;
+                  }
+                } catch (e) {
+                  console.error("Metadata buffer parse error:", e);
+                }
+              }
+              
               if (code === 0 || code === null) {
-                console.log(`Finished downloading new videos for playlist: ${sub.title || sub.url}`);
-                
-                // 기존 videoIds와 새로 다운로드된 영상 ID 병합
-                sub.videoIds = Array.from(new Set([...sub.videoIds, ...downloadedVideoIds]));
-                sub.lastCheck = Date.now();
-                await this.saveSubscriptions();
-                
-                // 수집된 개별 메타데이터와 함께 파일 임포트
-                await this.importAndRemoveDownloadedFiles(
-                  tempFolder, 
-                  sub.url, 
-                  playlistMetadata, 
-                  sub.folderName, 
-                  downloadedMetadata
-                );
                 resolve();
               } else {
-                reject(new Error(`Phase2: yt-dlp exited with code ${code}`));
+                reject(new Error(`Metadata: yt-dlp exited with code ${code}`));
               }
             });
           });
-        } catch (error) {
-          console.error(
-            `Error checking for new videos in playlist ${
-              sub.title || sub.url
-            }:`,
-            error
-          );
-          this.updateStatusUI(
-            `Error checking playlist ${sub.title || sub.url}: ${error.message}`
-          );
-        } finally {
-          // 임시 폴더 삭제 시도
-          try {
-            await fs.rm(tempFolder, { recursive: true, force: true });
-            console.log(`Removed temp folder: ${tempFolder}`);
-          } catch (error) {
-            console.error(`Failed to remove temp folder: ${tempFolder}`, error);
+        }
+        
+        // Phase 3: 실제 다운로드 (새 영상만)
+        this.updateStatusUI(`${sub.title || sub.url}: ${downloadedVideoIds.length}개 영상 다운로드 시작`);
+        
+        // 영상을 동시에 10개씩 나누어 다운로드 (메모리 효율적)
+        const downloadBatchSize = 5;
+        const downloadedFiles = [];
+        
+        for (let i = 0; i < downloadedVideoIds.length; i += downloadBatchSize) {
+          const batchIds = downloadedVideoIds.slice(i, i + downloadBatchSize);
+          const batchUrls = batchIds.map(id => `https://www.youtube.com/watch?v=${id}`);
+          
+          this.updateStatusUI(`${sub.title || sub.url}: 영상 다운로드 중 (${i+1}-${Math.min(i+downloadBatchSize, downloadedVideoIds.length)}/${downloadedVideoIds.length})`);
+          
+          const phase3Args = [
+            "--ffmpeg-location", this.downloadManager.ffmpegPath,
+            "-o", `${tempFolder}/%(id)s_%(title)s.%(ext)s`,
+            "--progress",
+            "--no-warnings",
+            "--newline"
+          ];
+
+          // 포맷 및 품질 설정 추가
+          if (sub.format === "mp3") {
+            phase3Args.push("-x", "--audio-format", "mp3");
+          } else if (sub.format === "best") {
+            phase3Args.push("-f", "bv*+ba/b");
+          } else {
+            let formatString = sub.format;
+            if (sub.quality) {
+              formatString += `-${sub.quality}`;
+            }
+            phase3Args.push("-f", formatString);
           }
+
+          // 배치 URL 추가
+          phase3Args.push(...batchUrls);
+          
+          await new Promise((resolve, reject) => {
+            const phase3Process = spawn(this.downloadManager.ytDlpPath, phase3Args);
+            
+            phase3Process.stdout.on("data", (data) => {
+              this.updateProgress(data.toString());
+            });
+            
+            phase3Process.stderr.on("data", (data) => {
+              console.error("Download yt-dlp stderr:", data.toString());
+            });
+            
+            phase3Process.on("close", (code) => {
+              if (code === 0 || code === null) {
+                resolve();
+              } else {
+                reject(new Error(`Download: yt-dlp exited with code ${code}`));
+              }
+            });
+          });
+        }
+        
+        console.log(`모든 새 영상 다운로드 완료: ${sub.title || sub.url}`);
+        
+        // 기존 videoIds와 새로 다운로드된 영상 ID 병합
+        sub.videoIds = Array.from(new Set([...sub.videoIds, ...downloadedVideoIds]));
+        sub.lastCheck = Date.now();
+        await this.saveSubscriptions();
+        
+        // 수집된 개별 메타데이터와 함께 파일 임포트
+        await this.importAndRemoveDownloadedFiles(
+          tempFolder, 
+          sub.url, 
+          playlistMetadata, 
+          sub.folderName, 
+          downloadedMetadata
+        );
+        
+        return { 
+          subscription: sub, 
+          newVideos: downloadedVideoIds.length, 
+          error: null 
+        };
+      } finally {
+        // 임시 폴더 삭제
+        try {
+          await fs.rm(tempFolder, { recursive: true, force: true });
+          console.log(`임시 폴더 삭제됨: ${tempFolder}`);
+        } catch (error) {
+          console.error(`임시 폴더 삭제 실패: ${tempFolder}`, error);
         }
       }
-    } finally {
-      this.isChecking = false;
-      console.log("Finished checking all subscriptions.");
-      this.emit('checkComplete');
+    } catch (error) {
+      console.error(
+        `재생목록 확인 중 오류 발생 ${sub.title || sub.url}:`,
+        error
+      );
+      this.updateStatusUI(
+        `재생목록 확인 중 오류: ${sub.title || sub.url}: ${error.message}`
+      );
+      return { 
+        subscription: sub, 
+        newVideos: 0, 
+        error: error.message 
+      };
     }
   }
 
