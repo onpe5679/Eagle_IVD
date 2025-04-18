@@ -394,14 +394,14 @@ class SubscriptionManager extends EventEmitter {
             
             // 타임아웃 설정 (3분)
             const timeoutId = setTimeout(() => {
-              console.log(`메타데이터 배치 ${i+1} 처리 타임아웃 - 15초 초과`);
+              console.log(`메타데이터 배치 ${i+1} 처리 타임아웃 - 20초 초과`);
               this.updateStatusUI(`경고: 메타데이터 처리 타임아웃 - 다음 배치로 진행합니다`);
               
               if (metadataProcess.exitCode === null) {
                 metadataProcess.kill();
               }
               resolve(); // 타임아웃이어도 다음 단계로 진행
-            }, 15000); // 15초 = 15000ms
+            }, 20000); // 20 = 20000ms
             
             metadataProcess.stdout.on("data", (data) => {
               metaBuffer += data.toString();
@@ -858,29 +858,33 @@ Views: ${currentMetadata.view_count || "N/A"}`,
     const match = output.match(
       /\[download\]\s+(\d+\.?\d*)%\s+of\s+([\d.]+[KMGT]?iB)\s+at\s+([\d.]+[KMGT]?iB\/s)\s+ETA\s+([\d:]+)/
     );
-    if (match) {
-      const progress = match[1];
-      const fileSize = match[2];
-      const speed = match[3];
-      const eta = match[4];
-      this.updateStatusUI(
-        `Progress: ${progress}%, Size: ${fileSize}, Speed: ${speed}, ETA: ${eta}`
-      );
+    // [download] 메시지도 진행률로 처리
+    const isDownloadMessage = output.trim().startsWith('[download]');
+    
+    if (match || isDownloadMessage) {
+      this.updateStatusUI(output, true);
     } else {
-      this.updateStatusUI(output);
+      this.updateStatusUI(output, false);
     }
   }
 
   /**
    * UI 상태 업데이트
    * @param {string} message - 상태 메시지
+   * @param {boolean} isProgress - 다운로드 진행상황 메시지 여부
    */
-  updateStatusUI(message) {
-    console.log("updateUI called with message:", message);
+  updateStatusUI(message, isProgress = false) {
+    if (isProgress) {
+      // 다운로드 진행률 및 [download] 관련 메시지는 debug 레벨로 출력
+      console.debug("updateUI called with message:", message);
+    } else {
+      // 일반 메시지는 log 레벨로 출력
+      console.log("updateUI called with message:", message);
+    }
+    
     if (window.updateUI) {
       window.updateUI(message);
     }
-    // 이벤트 발생
     this.emit('statusUpdate', message);
   }
 }
