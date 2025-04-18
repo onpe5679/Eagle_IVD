@@ -1,44 +1,34 @@
 [
   {
-    "url": "https://youtube.com/playlist?list=PLTwZvCJabx0d9oR4ztkspQqHtgKzNFXHI&si=c8IClGIoXa_9c6sd",
+    "url": "https://www.youtube.com/playlist?list=PLTwZvCJabx0d9oR4ztkspQqHtgKzNFXHI",
     "folderName": "",
     "format": "best",
     "quality": "",
     "videoIds": [
       "BiD7u0Svsvk",
       "0XGAV1weF00",
-      "tXV6ljvZrrI"
+      "kbNdx0yqbZE",
+      "qnX2CdOBcDI",
+      "Atvsg_zogxo"
     ],
     "title": "테스트1",
-    "lastCheck": 1744815782932
+    "lastCheck": 1744948030491
   },
   {
-    "url": "https://youtube.com/playlist?list=PLTwZvCJabx0c_cPV97DnCMpTWmMxmmiBd&si=AHpMgjwGfjDP9FMN",
+    "url": "https://youtube.com/playlist?list=PLTwZvCJabx0dHo3cGNLY_HIocqSC299Z5&si=8s8iR_gWDXbwSaR-",
     "folderName": "",
     "format": "best",
     "quality": "",
     "videoIds": [
-      "IGqABlNrpyE",
-      "uI9WfIkybAc",
-      "wfCdB98dJPQ",
-      "r9VRm5DNowU",
-      "uLMRTvRrvYg",
-      "GCKSrC6XVOk"
+      "dcOwj-QE_ZE",
+      "Q8nBh1oyiPg",
+      "35nV_M3asRs",
+      "cRFSbeHXFwk",
+      "Atvsg_zogxo",
+      "wA1LKdGwFgc",
+      "wMaergT5JX4"
     ],
-    "title": "일페",
-    "lastCheck": 1744815963070
-  },
-  {
-    "url": "https://youtube.com/playlist?list=PLTwZvCJabx0ciqrDqRIORedDg-wsw2PR1&si=kNLFMpSWAtQlAJmn",
-    "folderName": "",
-    "format": "best",
-    "quality": "",
-    "videoIds": [
-      "XC_zEpo0_Ms",
-      "HQCwbP5twzY",
-      "73stcwZC9vk"
-    ],
-    "title": "s2",
-    "lastCheck": 1744815991257
+    "title": "테스트2",
+    "lastCheck": 1744948046453
   }
 ]

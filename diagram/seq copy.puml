@@ -1,0 +1,35 @@
+sequenceDiagram
+    participant SM as SubscriptionManager
+    participant Eagle as Eagle API
+    participant FS as 파일 시스템
+
+    SM->>Eagle: eagle.item.get({ website: videoUrl })
+    Eagle-->>SM: 기존 아이템 목록 반환
+    
+    alt 중복 아이템 존재
+        SM->>SM: 플레이리스트/채널 태그 생성
+        Note over SM: playlistTag = `Playlist: ${folderName}`
+        Note over SM: channelTag = `Channel: ${currentMetadata.uploader}`
+        
+        SM->>SM: 플레이리스트 태그 중복 확인
+        Note over SM: if (!existingItem.tags.includes(playlistTag))
+        
+        SM->>SM: 채널 태그 중복 확인
+        Note over SM: if (!existingItem.tags.includes(channelTag))
+        
+        SM->>SM: 폴더 정보 중복 확인
+        Note over SM: if (playlistFolderId && !existingItem.folders.includes(playlistFolderId))
+        
+        SM->>Eagle: existingItem.save()
+        
+        SM->>FS: 임시 파일 삭제 (fs.unlink(filePath))
+    else 중복 아이템 없음
+        SM->>SM: 파일 메타데이터 생성
+        Note over SM: fileMetadata = {name, website, annotation, tags, folders}
+        
+        SM->>Eagle: eagle.item.addFromPath(filePath, fileMetadata)
+        
+        SM->>SM: 'videoAdded' 이벤트 발생
+        
+        SM->>FS: 임시 파일 삭제 (fs.unlink(filePath))
+    end
