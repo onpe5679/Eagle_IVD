@@ -4,7 +4,7 @@
  */
 
 // Eagle 플러그인 환경에서 사용 가능한 모듈 로딩 방식
-let DownloadManager, EnhancedSubscriptionManager, eagleApi, utils, uiController;
+let DownloadManager, EnhancedSubscriptionManager, LibraryMaintenance, eagleApi, utils, uiController;
 
 // 필요한 모듈 동적 로딩
 function loadModules() {
@@ -24,6 +24,10 @@ function loadModules() {
     const subManager = require('../js/modules/subscription-manager.js');
     EnhancedSubscriptionManager = subManager.EnhancedSubscriptionManager;
     console.log("구독 관리자 모듈 로드 성공");
+    
+    // 라이브러리 유지 관리 모듈 로드
+    LibraryMaintenance = require('../js/modules/library-maintenance.js');
+    console.log("라이브러리 유지 관리 모듈 로드 성공");
     
     // Eagle API 모듈 로드
     eagleApi = require('../js/modules/eagle-api.js');
@@ -61,6 +65,8 @@ eagle.onPluginCreate(async (plugin) => {
   const downloadManager = new DownloadManager(plugin.path);
   // 구독 관리자 초기화
   const subscriptionManager = new EnhancedSubscriptionManager(plugin.path);
+  // 라이브러리 유지 관리 초기화
+  const libraryMaintenance = new LibraryMaintenance(plugin.path);
   
   // 구독 관리자에 다운로드 관리자 설정
   subscriptionManager.setDownloadManager(downloadManager);
@@ -320,6 +326,146 @@ eagle.onPluginCreate(async (plugin) => {
     }
   };
 
+  // 유지 관리 관련 함수 등록
+  
+  // 중복 검사 실행
+  window.checkDuplicates = async () => {
+    try {
+      uiController.updateMaintenanceUI("중복 검사를 시작합니다...", 0, true);
+      
+      // 상태 업데이트 이벤트 리스너
+      libraryMaintenance.on('statusUpdate', (message) => {
+        uiController.updateMaintenanceUI(message, 50);
+        uiController.appendLog(message);
+      });
+      
+      // 작업 완료 이벤트 리스너
+      libraryMaintenance.once('checkComplete', () => {
+        uiController.updateMaintenanceUI("중복 검사가 완료되었습니다.", 100, false);
+        libraryMaintenance.removeAllListeners('statusUpdate');
+      });
+      
+      // 중복 검사 실행
+      const report = await libraryMaintenance.checkDuplicates();
+      console.log("중복 검사 완료:", report);
+    } catch (error) {
+      console.error("중복 검사 실패:", error);
+      uiController.showError(`중복 검사 실패: ${error.message}`);
+      uiController.updateMaintenanceUI("오류 발생", 0, false);
+      libraryMaintenance.removeAllListeners();
+    }
+  };
+  
+  // 일치성 검사 실행
+  window.checkConsistency = async () => {
+    try {
+      uiController.updateMaintenanceUI("일치성 검사를 시작합니다...", 0, true);
+      
+      // 상태 업데이트 이벤트 리스너
+      libraryMaintenance.on('statusUpdate', (message) => {
+        uiController.updateMaintenanceUI(message, 50);
+        uiController.appendLog(message);
+      });
+      
+      // 작업 완료 이벤트 리스너
+      libraryMaintenance.once('checkComplete', () => {
+        uiController.updateMaintenanceUI("일치성 검사가 완료되었습니다.", 100, false);
+        libraryMaintenance.removeAllListeners('statusUpdate');
+      });
+      
+      // 일치성 검사 실행
+      const report = await libraryMaintenance.checkConsistency();
+      console.log("일치성 검사 완료:", report);
+    } catch (error) {
+      console.error("일치성 검사 실패:", error);
+      uiController.showError(`일치성 검사 실패: ${error.message}`);
+      uiController.updateMaintenanceUI("오류 발생", 0, false);
+      libraryMaintenance.removeAllListeners();
+    }
+  };
+  
+  // 불일치 항목 수정
+  window.fixInconsistencies = async () => {
+    try {
+      uiController.updateMaintenanceUI("불일치 항목 수정을 시작합니다...", 0, true);
+      
+      // 상태 업데이트 이벤트 리스너
+      libraryMaintenance.on('statusUpdate', (message) => {
+        uiController.updateMaintenanceUI(message, 50);
+        uiController.appendLog(message);
+      });
+      
+      // 작업 완료 이벤트 리스너
+      libraryMaintenance.once('fixComplete', () => {
+        uiController.updateMaintenanceUI("불일치 항목 수정이 완료되었습니다.", 100, false);
+        libraryMaintenance.removeAllListeners('statusUpdate');
+      });
+      
+      // 불일치 항목 수정 실행
+      const report = await libraryMaintenance.fixInconsistencies('db');
+      console.log("불일치 항목 수정 완료:", report);
+    } catch (error) {
+      console.error("불일치 항목 수정 실패:", error);
+      uiController.showError(`불일치 항목 수정 실패: ${error.message}`);
+      uiController.updateMaintenanceUI("오류 발생", 0, false);
+      libraryMaintenance.removeAllListeners();
+    }
+  };
+  
+  // 유지 관리 취소
+  window.cancelMaintenance = () => {
+    try {
+      libraryMaintenance.isRunning = false;
+      uiController.updateMaintenanceUI("작업이 취소되었습니다.", 0, false);
+      libraryMaintenance.removeAllListeners();
+      console.log("유지 관리 작업 취소됨");
+    } catch (error) {
+      console.error("작업 취소 실패:", error);
+    }
+  };
+  
+  // 중복 보고서 보기
+  window.viewDuplicateReport = async () => {
+    try {
+      const fs = require('fs').promises;
+      const path = require('path');
+      const reportPath = path.join(plugin.path, "duplicate-check-report.json");
+      
+      try {
+        const content = await fs.readFile(reportPath, 'utf8');
+        const report = JSON.parse(content);
+        uiController.showReportDialog("중복 검사 보고서", report);
+      } catch (error) {
+        console.error("보고서 로드 실패:", error);
+        uiController.showError("보고서가 아직 생성되지 않았습니다.");
+      }
+    } catch (error) {
+      console.error("보고서 보기 실패:", error);
+      uiController.showError(`보고서 보기 실패: ${error.message}`);
+    }
+  };
+  
+  // 일치성 보고서 보기
+  window.viewConsistencyReport = async () => {
+    try {
+      const fs = require('fs').promises;
+      const path = require('path');
+      const reportPath = path.join(plugin.path, "consistency-check-report.json");
+      
+      try {
+        const content = await fs.readFile(reportPath, 'utf8');
+        const report = JSON.parse(content);
+        uiController.showReportDialog("일치성 검사 보고서", report);
+      } catch (error) {
+        console.error("보고서 로드 실패:", error);
+        uiController.showError("보고서가 아직 생성되지 않았습니다.");
+      }
+    } catch (error) {
+      console.error("보고서 보기 실패:", error);
+      uiController.showError(`보고서 보기 실패: ${error.message}`);
+    }
+  };
+
   // UI 초기화 함수
   function initializeUI() {
     console.log("UI 초기화 시작");
@@ -547,6 +693,79 @@ eagle.onPluginCreate(async (plugin) => {
       console.error("Failed to load subscriptions:", error);
       uiController.showError("Failed to load subscriptions");
     });
+    
+    // 유지 관리 탭 버튼 이벤트 리스너
+    
+    // 중복 검사 버튼
+    const checkDuplicatesBtn = document.getElementById('checkDuplicatesBtn');
+    if (checkDuplicatesBtn) {
+      console.log("중복 검사 버튼 찾음");
+      checkDuplicatesBtn.addEventListener('click', () => {
+        console.log("중복 검사 버튼 클릭됨");
+        window.checkDuplicates();
+      });
+    } else {
+      console.error("중복 검사 버튼을 찾을 수 없음");
+    }
+    
+    // 일치성 검사 버튼
+    const checkConsistencyBtn = document.getElementById('checkConsistencyBtn');
+    if (checkConsistencyBtn) {
+      console.log("일치성 검사 버튼 찾음");
+      checkConsistencyBtn.addEventListener('click', () => {
+        console.log("일치성 검사 버튼 클릭됨");
+        window.checkConsistency();
+      });
+    } else {
+      console.error("일치성 검사 버튼을 찾을 수 없음");
+    }
+    
+    // 불일치 항목 수정 버튼
+    const fixInconsistenciesBtn = document.getElementById('fixInconsistenciesBtn');
+    if (fixInconsistenciesBtn) {
+      console.log("불일치 항목 수정 버튼 찾음");
+      fixInconsistenciesBtn.addEventListener('click', () => {
+        console.log("불일치 항목 수정 버튼 클릭됨");
+        window.fixInconsistencies();
+      });
+    } else {
+      console.error("불일치 항목 수정 버튼을 찾을 수 없음");
+    }
+    
+    // 유지 관리 취소 버튼
+    const cancelMaintenanceBtn = document.getElementById('cancelMaintenanceBtn');
+    if (cancelMaintenanceBtn) {
+      console.log("유지 관리 취소 버튼 찾음");
+      cancelMaintenanceBtn.addEventListener('click', () => {
+        console.log("유지 관리 취소 버튼 클릭됨");
+        window.cancelMaintenance();
+      });
+    } else {
+      console.error("유지 관리 취소 버튼을 찾을 수 없음");
+    }
+    
+    // 보고서 보기 버튼
+    const viewDuplicateReportBtn = document.getElementById('viewDuplicateReportBtn');
+    if (viewDuplicateReportBtn) {
+      console.log("중복 보고서 보기 버튼 찾음");
+      viewDuplicateReportBtn.addEventListener('click', () => {
+        console.log("중복 보고서 보기 버튼 클릭됨");
+        window.viewDuplicateReport();
+      });
+    } else {
+      console.error("중복 보고서 보기 버튼을 찾을 수 없음");
+    }
+    
+    const viewConsistencyReportBtn = document.getElementById('viewConsistencyReportBtn');
+    if (viewConsistencyReportBtn) {
+      console.log("일치성 보고서 보기 버튼 찾음");
+      viewConsistencyReportBtn.addEventListener('click', () => {
+        console.log("일치성 보고서 보기 버튼 클릭됨");
+        window.viewConsistencyReport();
+      });
+    } else {
+      console.error("일치성 보고서 보기 버튼을 찾을 수 없음");
+    }
     
     console.log("UI 초기화 완료");
   }

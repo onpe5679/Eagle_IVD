@@ -250,6 +250,99 @@ function updateAutoCheckButtonsState(isRunning) {
   }
 }
 
+/**
+ * 유지 관리 진행 상태 업데이트
+ * @param {string} status - 상태 메시지
+ * @param {number} progress - 진행률 (0-100)
+ * @param {boolean} isRunning - 실행 중 여부
+ */
+function updateMaintenanceUI(status, progress = 0, isRunning = true) {
+  const maintenanceProgress = document.getElementById("maintenanceProgress");
+  const maintenanceStatus = document.getElementById("maintenanceStatus");
+  const maintenanceProgressBar = document.getElementById("maintenanceProgressBar");
+  const cancelMaintenanceBtn = document.getElementById("cancelMaintenanceBtn");
+  
+  if (!maintenanceProgress || !maintenanceStatus || !maintenanceProgressBar) return;
+  
+  if (isRunning) {
+    maintenanceProgress.classList.remove("hidden");
+    maintenanceStatus.textContent = status;
+    maintenanceProgressBar.style.width = `${progress}%`;
+    
+    // 버튼 비활성화
+    document.getElementById("checkDuplicatesBtn")?.setAttribute("disabled", "disabled");
+    document.getElementById("checkConsistencyBtn")?.setAttribute("disabled", "disabled");
+    document.getElementById("fixInconsistenciesBtn")?.setAttribute("disabled", "disabled");
+    
+    // 취소 버튼 활성화
+    if (cancelMaintenanceBtn) {
+      cancelMaintenanceBtn.classList.remove("hidden");
+    }
+  } else {
+    maintenanceProgress.classList.add("hidden");
+    
+    // 버튼 활성화
+    document.getElementById("checkDuplicatesBtn")?.removeAttribute("disabled");
+    document.getElementById("checkConsistencyBtn")?.removeAttribute("disabled");
+    document.getElementById("fixInconsistenciesBtn")?.removeAttribute("disabled");
+    
+    // 취소 버튼 비활성화
+    if (cancelMaintenanceBtn) {
+      cancelMaintenanceBtn.classList.add("hidden");
+    }
+  }
+}
+
+/**
+ * 보고서 보기 대화상자 표시
+ * @param {string} title - 대화상자 제목
+ * @param {object} report - 보고서 객체
+ */
+function showReportDialog(title, report) {
+  // 기존 대화상자 제거
+  const existingDialog = document.getElementById("reportDialog");
+  if (existingDialog) {
+    existingDialog.remove();
+  }
+  
+  // 새 대화상자 생성
+  const dialog = document.createElement("div");
+  dialog.id = "reportDialog";
+  dialog.className = "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50";
+  
+  const content = document.createElement("div");
+  content.className = "bg-white rounded-lg shadow-xl p-6 max-w-2xl w-full max-h-[80vh] overflow-auto";
+  
+  content.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="text-xl font-bold">${title}</h3>
+      <button id="closeReportBtn" class="text-gray-500 hover:text-gray-700">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+    <div class="border rounded p-4 bg-gray-50 mb-4">
+      <pre class="text-sm whitespace-pre-wrap">${JSON.stringify(report, null, 2)}</pre>
+    </div>
+    <div class="text-right">
+      <button id="closeReportBtn2" class="bg-blue-500 text-white px-4 py-2 rounded">닫기</button>
+    </div>
+  `;
+  
+  dialog.appendChild(content);
+  document.body.appendChild(dialog);
+  
+  // 닫기 버튼 이벤트 리스너
+  document.getElementById("closeReportBtn").addEventListener("click", () => {
+    dialog.remove();
+  });
+  
+  document.getElementById("closeReportBtn2").addEventListener("click", () => {
+    dialog.remove();
+  });
+}
+
 // 모듈 내보내기
 module.exports = {
   updateStatusUI,
@@ -261,5 +354,7 @@ module.exports = {
   appendLog,
   showTab,
   showError,
-  updateAutoCheckButtonsState
+  updateAutoCheckButtonsState,
+  updateMaintenanceUI,
+  showReportDialog
 }; 
