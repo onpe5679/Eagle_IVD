@@ -203,8 +203,17 @@ class LibraryMaintenance extends EventEmitter {
 
       // primary 항목 업데이트 (메타데이터만 수정)
       try {
-        await eagle.item.modify(primary.id, mergedMetadata);
-        console.log(`Primary 항목 업데이트 완료: ${primary.id} (${primary.name})`);
+        const primaryItem = await eagle.item.getById(primary.id);
+        if (primaryItem) {
+          // 메타데이터 업데이트
+          primaryItem.folders = mergedMetadata.folders;
+          primaryItem.tags = mergedMetadata.tags;
+          primaryItem.annotation = mergedMetadata.annotation;
+          await primaryItem.save();
+          console.log(`Primary 항목 업데이트 완료: ${primaryItem.id} (${primaryItem.name})`);
+        } else {
+          console.warn(`Primary Item ${primary.id}를 찾을 수 없습니다.`);
+        }
       } catch (err) {
         console.error(`Primary 항목 업데이트 중 오류 발생:`, err);
         this.stats.errors.push(`Primary 항목 업데이트 실패 (${primary.id}): ${err.message}`);
