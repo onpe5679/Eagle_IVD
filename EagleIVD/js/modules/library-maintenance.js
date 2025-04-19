@@ -146,8 +146,8 @@ class LibraryMaintenance extends EventEmitter {
    */
   async resolveDuplicate(videoId, relatedSubs) {
     try {
-      // Eagle에서 해당 videoId를 가진 모든 항목(annotation 기반) 검색
-      const allItems = await eagle.item.get({ annotation: `Video ID: ${videoId}` });
+      // 태그 기반으로 해당 videoId를 가진 항목만 검색 (중복 항목만 대상)
+      const allItems = await eagle.item.get({ tags: [`videoId:${videoId}`] });
 
       // 관련 구독 폴더 ID 목록 생성
       const relatedFolderIds = relatedSubs
