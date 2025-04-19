@@ -166,9 +166,19 @@ class LibraryMaintenance extends EventEmitter {
       // 메타데이터 통합
       const mergedMetadata = this.mergeMetadata(primary, duplicates);
 
-      // 중복 항목 삭제
+      // 중복 항목 삭제 -> moveToTrash 사용
       for (const dup of duplicates) {
-        await eagle.item.delete(dup.id);
+        try {
+          // Eagle 항목 객체의 moveToTrash 메서드 호출
+          if (typeof dup.moveToTrash === 'function') {
+            await dup.moveToTrash();
+          } else {
+            // 능동적 삭제를 지원하지 않는 경우 경고
+            console.warn(`Item ${dup.id}에서 moveToTrash 메서드를 찾을 수 없습니다.`);
+          }
+        } catch (err) {
+          console.error(`Item ${dup.id}을(를) 휴지통으로 이동 중 오류 발생:`, err);
+        }
       }
 
       // primary 항목 업데이트
