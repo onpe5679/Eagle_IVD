@@ -185,11 +185,15 @@ class LibraryMaintenance extends EventEmitter {
       // 중복 항목만 휴지통으로 이동
       for (const dup of duplicates) {
         try {
-          if (typeof dup.moveToTrash === 'function') {
-            await dup.moveToTrash();
-            console.log(`중복 항목 휴지통으로 이동: ${dup.id} (${dup.name})`);
+          // 아이템 정보 가져오기
+          const item = await eagle.item.getById(dup.id);
+          if (item) {
+            // isDeleted를 true로 설정하여 휴지통으로 이동
+            item.isDeleted = true;
+            await item.save();
+            console.log(`중복 항목 휴지통으로 이동: ${item.id} (${item.name})`);
           } else {
-            console.warn(`Item ${dup.id}에서 moveToTrash 메서드를 찾을 수 없습니다.`);
+            console.warn(`Item ${dup.id}를 찾을 수 없습니다.`);
           }
         } catch (err) {
           console.error(`Item ${dup.id}을(를) 휴지통으로 이동 중 오류 발생:`, err);
