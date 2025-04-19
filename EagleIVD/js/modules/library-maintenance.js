@@ -81,6 +81,16 @@ class LibraryMaintenance extends EventEmitter {
       this.emit('statusUpdate', "중복 검사를 시작합니다...");
       
       const subscriptions = await this.loadSubscriptionsDB();
+      this.subscriptions = subscriptions;
+
+      // Eagle 라이브러리의 모든 폴더 ID 매핑
+      let folderList = [];
+      try {
+        folderList = await eagle.folder.get();
+      } catch (err) {
+        console.warn('폴더 목록 로드 실패, 기본 처리 진행:', err);
+      }
+      this.folderMap = new Map(folderList.map(f => [f.name, f.id]));
       
       // 모든 구독의 videoIds 수집
       const videoMap = new Map(); // videoId -> 출현 횟수
@@ -91,17 +101,20 @@ class LibraryMaintenance extends EventEmitter {
         }
       }
 
-      // 중복된 videoId만 필터링
-      const duplicateIds = Array.from(videoMap.entries())
+      // 중복된 videoId만 필터링하고 관련 구독 정보 포함
+      const duplicateGroups = Array.from(videoMap.entries())
         .filter(([_, count]) => count > 1)
-        .map(([id]) => id);
+        .map(([videoId, _]) => {
+          const relatedSubs = this.subscriptions.filter(s => (s.videoIds || []).includes(videoId));
+          return { videoId, relatedSubs };
+        });
 
-      this.emit('statusUpdate', `중복 검사: ${duplicateIds.length}개의 중복 의심 항목 발견`);
-      console.log(`중복 검사: ${duplicateIds.length}개의 중복 의심 항목 발견`);
+      this.emit('statusUpdate', `중복 검사: ${duplicateGroups.length}개의 중복 의심 그룹 발견`);
+      console.log(`중복 검사: ${duplicateGroups.length}개의 중복 의심 그룹 발견`);
 
-      // 각 중복 항목 처리
-      for (const videoId of duplicateIds) {
-        await this.resolveDuplicate(videoId);
+      // 각 중복 그룹 처리
+      for (const group of duplicateGroups) {
+        await this.resolveDuplicate(group.videoId, group.relatedSubs);
       }
 
       // 결과 리포트 작성
@@ -126,67 +139,70 @@ class LibraryMaintenance extends EventEmitter {
   }
 
   /**
-   * 개별 중복 항목 처리
+   * 개별 중복 항목 처리 (구독 컨텍스트 포함)
    * @param {string} videoId - 비디오 ID
+   * @param {Array<object>} relatedSubs - 관련 구독 객체 배열
    * @returns {Promise<void>}
    */
-  async resolveDuplicate(videoId) {
+  async resolveDuplicate(videoId, relatedSubs) {
     try {
-      // Eagle에서 해당 videoId를 가진 항목 검색
-      const items = await eagle.item.get({
-        annotation: `Video ID: ${videoId}`
-      });
+      // Eagle에서 해당 videoId를 가진 모든 항목(annotation 기반) 검색
+      const allItems = await eagle.item.get({ annotation: `Video ID: ${videoId}` });
 
-      // URL 기반으로도 검색 (annotation에 videoId가 없는 경우)
-      const urlItems = await eagle.item.get({
-        website: `https://www.youtube.com/watch?v=${videoId}`
-      });
-      
-      // 두 결과 병합 (ID 기준 중복 제거)
-      const allItems = [...items];
-      for (const item of urlItems) {
-        if (!allItems.some(i => i.id === item.id)) {
-          allItems.push(item);
-        }
-      }
+      // 관련 구독 폴더 ID 목록 생성
+      const relatedFolderIds = relatedSubs
+        .map(s => this.folderMap.get(s.folderName || s.title))
+        .filter(Boolean);
 
-      if (allItems.length <= 1) {
-        console.warn(`경고: VideoID ${videoId}가 Eagle에서 중복으로 발견되지 않음`);
+      // 관련 구독 폴더 내에 있는 아이템만 필터링
+      const targetItems = allItems.filter(item =>
+        Array.isArray(item.folders) && item.folders.some(fid => relatedFolderIds.includes(fid))
+      );
+
+      if (targetItems.length <= 1) {
+        console.warn(`VideoID ${videoId}: 관련 구독 폴더 내에 중복 항목 없음, 스킵`);
         return;
       }
 
       this.stats.duplicatesFound++;
-      this.emit('statusUpdate', `중복 처리 중: VideoID ${videoId} (${allItems.length}개 발견)`);
+      this.emit('statusUpdate', `중복 처리 중: VideoID ${videoId} (${targetItems.length}개 발견)`);
 
-      // 가장 오래된 항목을 primary로 선택
-      const sortedItems = allItems.sort((a, b) => a.added - b.added);
-      const primary = sortedItems[0];
-      const duplicates = sortedItems.slice(1);
+      // 가장 오래된 항목(primary)과 그 외 중복 항목 분리
+      const sorted = targetItems.sort((a, b) => a.added - b.added);
+      const primary = sorted[0];
+      const duplicates = sorted.slice(1);
 
       // 메타데이터 통합
       const mergedMetadata = this.mergeMetadata(primary, duplicates);
 
-      // 중복 항목 삭제 -> moveToTrash 사용
+      // 중복 항목만 휴지통으로 이동
       for (const dup of duplicates) {
         try {
-          // Eagle 항목 객체의 moveToTrash 메서드 호출
           if (typeof dup.moveToTrash === 'function') {
             await dup.moveToTrash();
+            console.log(`중복 항목 휴지통으로 이동: ${dup.id} (${dup.name})`);
           } else {
-            // 능동적 삭제를 지원하지 않는 경우 경고
             console.warn(`Item ${dup.id}에서 moveToTrash 메서드를 찾을 수 없습니다.`);
           }
         } catch (err) {
           console.error(`Item ${dup.id}을(를) 휴지통으로 이동 중 오류 발생:`, err);
+          this.stats.errors.push(`중복 항목 이동 실패 (${dup.id}): ${err.message}`);
         }
       }
 
-      // primary 항목 업데이트
-      await eagle.item.modify(primary.id, mergedMetadata);
+      // primary 항목 업데이트 (메타데이터만 수정)
+      try {
+        await eagle.item.modify(primary.id, mergedMetadata);
+        console.log(`Primary 항목 업데이트 완료: ${primary.id} (${primary.name})`);
+      } catch (err) {
+        console.error(`Primary 항목 업데이트 중 오류 발생:`, err);
+        this.stats.errors.push(`Primary 항목 업데이트 실패 (${primary.id}): ${err.message}`);
+      }
       
       this.stats.duplicatesResolved++;
-      this.emit('statusUpdate', `중복 해결: VideoID ${videoId} (${duplicates.length}개 통합)`);
-      console.log(`중복 해결: VideoID ${videoId} (${duplicates.length}개 통합)`);
+      // 그룹 단위로 1개 통합 처리 메시지 표시
+      this.emit('statusUpdate', `중복 해결: VideoID ${videoId} (1개 통합)`);
+      console.log(`중복 해결: VideoID ${videoId} (1개 통합)`);
 
     } catch (error) {
       console.error(`VideoID ${videoId} 처리 중 오류:`, error);
