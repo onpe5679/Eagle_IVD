@@ -265,10 +265,6 @@ class LibraryMaintenance extends EventEmitter {
    * @returns {Promise<object>} 검사 결과 리포트
    */
   async checkConsistency() {
-    if (this.isRunning) {
-      throw new Error("이미 작업이 실행 중입니다");
-    }
-
     // 상태 초기화
     this.stats = {
       duplicatesFound: 0,
@@ -279,7 +275,6 @@ class LibraryMaintenance extends EventEmitter {
     };
 
     try {
-      this.isRunning = true;
       this.emit('statusUpdate', "라이브러리 일치성 검사를 시작합니다...");
       
       const subscriptions = await this.loadSubscriptionsDB();
@@ -367,7 +362,6 @@ class LibraryMaintenance extends EventEmitter {
       this.emit('statusUpdate', `일치성 검사 오류: ${error.message}`);
       throw error;
     } finally {
-      this.isRunning = false;
       this.emit('checkComplete', 'consistency');
     }
   }
@@ -386,6 +380,7 @@ class LibraryMaintenance extends EventEmitter {
       this.isRunning = true;
       
       // 먼저 일치성 검사 실행
+      this.emit('statusUpdate', "라이브러리 일치성 검사를 시작합니다...");
       const report = await this.checkConsistency();
       
       // 모드에 따라 수정 작업 수행
