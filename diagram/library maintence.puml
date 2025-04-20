@@ -1,0 +1,83 @@
+@startuml
+skinparam sequenceArrowThickness 2
+
+title 영상 다운로드 및 구독 확인 과정 상세 다이어그램 (코드 기반 상세 버전)
+
+actor 사용자
+participant "클라이언트 UI" as UI
+participant "LibraryMaintenance" as LibMaint
+participant "Eagle Library" as Eagle
+participant "구독 DB (JSON)" as DB
+
+== 중복 검사 프로세스 ==
+사용자 -> UI: Click checkDuplicates button
+activate UI
+UI -> LibMaint: checkDuplicates()
+activate LibMaint
+
+LibMaint -> LibMaint: isRunning 체크
+note over LibMaint: 상태 초기화\nthis.stats = {...}
+
+LibMaint -> DB: loadSubscriptionsDB()
+DB --> LibMaint: subscriptions
+
+LibMaint -> Eagle: folder.get()
+Eagle --> LibMaint: folderList
+
+note over LibMaint
+videoMap 생성 및 중복 검사
+- 모든 구독의 videoIds 수집
+- 중복된 videoId 필터링
+- 관련 구독 정보 포함
+end note
+
+LibMaint -> UI: emit('statusUpdate', "중복 검사 시작...")
+
+loop 각 중복 그룹에 대해
+    LibMaint -> LibMaint: resolveDuplicate(videoId, relatedSubs)
+    activate LibMaint
+    
+    LibMaint -> Eagle: item.get({annotation: "Video ID: videoId"})
+    Eagle --> LibMaint: allItems
+    
+    note over LibMaint
+    관련 구독 폴더 내 아이템 필터링
+    - 폴더 ID 매핑
+    - 타겟 아이템 선택
+    end note
+    
+    alt 중복 항목 있음
+        note over LibMaint
+        - 가장 오래된 항목을 primary로 선택
+        - 나머지는 duplicates로 분류
+        end note
+        
+        loop 각 중복 항목에 대해
+            LibMaint -> Eagle: item.getById(duplicateId)
+            Eagle --> LibMaint: duplicateItem
+            
+            LibMaint -> Eagle: duplicateItem.moveToTrash()
+            Eagle --> LibMaint: result
+        end
+        
+        LibMaint -> LibMaint: mergeMetadata(primary, duplicates)
+        LibMaint -> Eagle: item.getById(primaryId)
+        Eagle --> LibMaint: primaryItem
+        
+        LibMaint -> Eagle: primaryItem.save() with merged metadata
+        Eagle --> LibMaint: result
+        
+        LibMaint -> UI: emit('statusUpdate', "중복 해결: VideoId xxx")
+    end
+    deactivate LibMaint
+end
+
+LibMaint -> LibMaint: generateReport()
+LibMaint -> DB: save report to duplicate-check-report.json
+LibMaint -> UI: emit('checkComplete')
+UI -> 사용자: Show completion message
+
+deactivate LibMaint
+deactivate UI
+
+@enduml 

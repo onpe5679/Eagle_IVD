@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Eagle Video Downloader</title>
+  <title>Eagle Video Downloader v1.0</title>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
   <style>
     #logs {
@@ -53,6 +53,7 @@
       <button class="tab-button font-bold" data-target="singleTab">Single Video</button>
       <button class="tab-button" data-target="subscriptionTab">Subscriptions</button>
       <button class="tab-button" data-target="maintenanceTab">라이브러리 관리</button>
+      <button class="tab-button" data-target="settingsTab">설정</button>
     </div>
 
     <!-- Single Video Tab -->
@@ -150,8 +151,55 @@
         </button>
       </div>
 
-      <!-- 구독 설정 -->
+      <!-- 구독 목록 -->
+      <div class="mb-4">
+        <div class="flex justify-between items-center mb-2">
+          <h3 class="font-bold">My Subscriptions</h3>
+          <div class="flex gap-2">
+            <button id="checkNewBtn" class="bg-blue-500 text-white px-4 py-2 rounded flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/>
+              </svg>
+              Check New Videos
+            </button>
+            <button id="startAutoCheckBtn" class="bg-green-500 text-white px-4 py-2 rounded">
+              Start Auto Check
+            </button>
+            <button id="stopAutoCheckBtn" class="bg-orange-500 text-white px-4 py-2 rounded hidden">
+              Stop Auto Check
+            </button>
+          </div>
+        </div>
+
+        <div id="subscriptionList" class="subscription-list divide-y border rounded">
+          <!-- 구독 항목들이 동적으로 추가됨 -->
+          <div class="p-3 text-gray-500 text-center">No subscriptions yet</div>
+        </div>
+      </div>
+
+      <!-- 다운로드 진행 상태 -->
+      <div id="downloadProgress" class="hidden">
+        <div class="bg-blue-50 p-4 rounded">
+          <h4 class="font-bold mb-2">Download Progress</h4>
+          <div id="currentTask" class="text-sm mb-1">Checking playlist: ...</div>
+          <div class="w-full bg-gray-200 rounded h-2">
+            <div id="progressBar" class="bg-blue-500 rounded h-2" style="width: 0%"></div>
+          </div>
+        </div>
+        <button id="cancelSubscriptionBtn" class="bg-red-500 text-white px-4 py-2 rounded mt-2">
+          Cancel
+        </button>
+      </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div id="settingsTab" class="tab-content hidden">
       <div class="bg-gray-50 p-4 rounded mb-4">
+        <h3 class="font-bold mb-2">설정</h3>
+        <div class="mb-4 flex items-center gap-2">
+          <input type="checkbox" id="prefixUploadDateChk" checked>
+          <label for="prefixUploadDateChk">제목 앞에 업로드날짜 붙이기</label>
+        </div>
         <h3 class="font-bold mb-2">Download Settings</h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -194,46 +242,6 @@
             <p class="text-xs text-gray-500 mt-1">다운로드 시 사용할 네트워크 인터페이스를 선택하세요</p>
           </div>
         </div>
-      </div>
-
-      <!-- 구독 목록 -->
-      <div class="mb-4">
-        <div class="flex justify-between items-center mb-2">
-          <h3 class="font-bold">My Subscriptions</h3>
-          <div class="flex gap-2">
-            <button id="checkNewBtn" class="bg-blue-500 text-white px-4 py-2 rounded flex items-center gap-2">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/>
-              </svg>
-              Check New Videos
-            </button>
-            <button id="startAutoCheckBtn" class="bg-green-500 text-white px-4 py-2 rounded">
-              Start Auto Check
-            </button>
-            <button id="stopAutoCheckBtn" class="bg-orange-500 text-white px-4 py-2 rounded hidden">
-              Stop Auto Check
-            </button>
-          </div>
-        </div>
-
-        <div id="subscriptionList" class="subscription-list divide-y border rounded">
-          <!-- 구독 항목들이 동적으로 추가됨 -->
-          <div class="p-3 text-gray-500 text-center">No subscriptions yet</div>
-        </div>
-      </div>
-
-      <!-- 다운로드 진행 상태 -->
-      <div id="downloadProgress" class="hidden">
-        <div class="bg-blue-50 p-4 rounded">
-          <h4 class="font-bold mb-2">Download Progress</h4>
-          <div id="currentTask" class="text-sm mb-1">Checking playlist: ...</div>
-          <div class="w-full bg-gray-200 rounded h-2">
-            <div id="progressBar" class="bg-blue-500 rounded h-2" style="width: 0%"></div>
-          </div>
-        </div>
-        <button id="cancelSubscriptionBtn" class="bg-red-500 text-white px-4 py-2 rounded mt-2">
-          Cancel
-        </button>
       </div>
     </div>
 

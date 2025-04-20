@@ -1,0 +1,139 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam class {
+    BackgroundColor White
+    ArrowColor Black
+    BorderColor Black
+}
+
+title Eagle IVD - 핵심 모듈 및 객체 관계도
+
+package "Core Modules" {
+    class "main.js" as Main {
+        + onPluginCreate()
+        + initializeUI()
+        + registerEventHandlers()
+        - setupMaintenanceHandlers()
+    }
+
+    class "subscription-manager.js" as SubManager {
+        - pluginPath: string
+        - subscriptions: Array
+        - isChecking: boolean
+        + addSubscription()
+        + removeSubscription()
+        + checkAllSubscriptions()
+        - processInBatches()
+        - checkSubscription()
+        - importAndRemoveDownloadedFiles()
+    }
+
+    class "download-manager.js" as DLManager {
+        - ytdlpPath: string
+        + getMetadata()
+        + downloadVideo()
+        - executeYtDlp()
+        - parseOutput()
+    }
+
+    class "library-maintenance.js" as LibMaint {
+        - pluginPath: string
+        - isRunning: boolean
+        - stats: object
+        + checkDuplicates()
+        + checkConsistency()
+        + fixInconsistencies()
+        - resolveDuplicate()
+        - mergeMetadata()
+    }
+
+    class "ui-controller.js" as UIController {
+        + updateMaintenanceUI()
+        + updateStatusUI()
+        + showError()
+        + appendLog()
+        + showConfirmDialog()
+    }
+
+    class "eagle-api.js" as EagleAPI {
+        + item: ItemAPI
+        + folder: FolderAPI
+        + isDuplicateItem()
+        + createOrFindFolder()
+        + updateItemFolders()
+        + updateItemTags()
+    }
+}
+
+package "Data Objects" {
+    class Subscription {
+        + url: string
+        + folderName: string
+        + format: string
+        + quality: string
+        + videoIds: Array
+        + title: string
+        + lastCheck: number
+    }
+
+    class MaintenanceStats {
+        + duplicatesFound: number
+        + duplicatesResolved: number
+        + inconsistenciesFound: number
+        + errors: Array
+    }
+
+    interface ItemAPI {
+        + get(query)
+        + getById(id)
+        + addFromPath(path, metadata)
+        + moveToTrash(id)
+        + modify(id, changes)
+    }
+
+    interface FolderAPI {
+        + get()
+        + create(data)
+        + modify(id, changes)
+    }
+}
+
+package "External Services" {
+    class "Eagle App" as Eagle {
+        + item
+        + folder
+        + library
+    }
+
+    class "yt-dlp" as YtDlp {
+        + download
+        + extract-info
+    }
+}
+
+' 의존성 관계
+Main --> SubManager: creates & manages
+Main --> LibMaint: creates & manages
+Main --> UIController: creates & manages
+
+SubManager --> DLManager: uses
+SubManager --> EagleAPI: uses
+SubManager --> Subscription: manages
+SubManager ..> YtDlp: uses via DLManager
+
+DLManager ..> YtDlp: executes
+LibMaint --> EagleAPI: uses
+LibMaint --> MaintenanceStats: manages
+
+EagleAPI ..> Eagle: interfaces with
+EagleAPI --> ItemAPI: implements
+EagleAPI --> FolderAPI: implements
+
+UIController --> SubManager: triggers actions
+UIController --> LibMaint: triggers maintenance
+
+' 이벤트 흐름
+SubManager ..> UIController: emits events
+LibMaint ..> UIController: emits events
+
+@enduml

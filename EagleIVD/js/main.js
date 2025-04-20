@@ -792,7 +792,17 @@ eagle.onPluginCreate(async (plugin) => {
     } catch (err) {
       console.error('NIC 목록 생성 실패:', err);
     }
-    
+
+    // 설정 탭: '제목 앞에 업로드날짜 붙이기' 체크박스 바인딩
+    const prefixChk = document.getElementById('prefixUploadDateChk');
+    if (prefixChk && typeof subscriptionManager !== 'undefined') {
+      subscriptionManager.prefixUploadDate = prefixChk.checked;
+      prefixChk.addEventListener('change', () => {
+        subscriptionManager.prefixUploadDate = prefixChk.checked;
+        console.log('설정 - 제목 앞에 업로드날짜 붙이기:', prefixChk.checked);
+      });
+    }
+
     console.log("UI 초기화 완료");
   }
 

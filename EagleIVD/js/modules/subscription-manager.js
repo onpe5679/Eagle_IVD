@@ -22,6 +22,14 @@ class SubscriptionManager extends EventEmitter {
     this.subscriptions = [];
     this.isChecking = false;
     this.downloadManager = null;
+    this.stats = {
+      duplicatesFound: 0,
+      duplicatesResolved: 0,
+      inconsistenciesFound: 0,
+      inconsistenciesResolved: 0,
+      errors: []
+    };
+    this.prefixUploadDate = true;
   }
 
   /**
@@ -822,9 +830,13 @@ class SubscriptionManager extends EventEmitter {
               videoTitle = videoTitle.substring(videoId.length + 1);
             }
 
-            // 각 영상별 고유 메타데이터로 파일 메타데이터 준비
+            // 제목 앞에 업로드 날짜를 붙이도록 설정된 경우 처리
+            let displayName = videoTitle;
+            if (this.prefixUploadDate && currentMetadata.upload_date) {
+              displayName = currentMetadata.upload_date + ' ' + videoTitle;
+            }
             const fileMetadata = {
-              name: videoTitle,
+              name: displayName,
               website: videoId ? `https://www.youtube.com/watch?v=${videoId}` : url,
               annotation: `Video ID: ${videoId || 'N/A'}
 Upload Date: ${currentMetadata.upload_date || "N/A"}
