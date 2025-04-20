@@ -296,14 +296,27 @@ class LibraryMaintenance extends EventEmitter {
       
       this.emit('statusUpdate', `Eagle 라이브러리에서 ${eagleItems.length}개의 YouTube 항목을 발견했습니다`);
 
-      // Eagle 항목의 videoId 추출
+      // Eagle 항목의 videoId 추출 (Default Playlist 폴더 제외)
       const eagleVideoIds = new Set();
       const eagleIdMap = new Map(); // videoId -> eagleItem
       
       // 진행 상황 업데이트 빈도 제한
       let processedCount = 0;
       
+      // Default Playlist 폴더 ID 가져오기
+      let defaultPlaylistId = null;
+      const allFolders = await eagle.folder.get();
+      const defaultPlaylistFolder = allFolders.find(f => f.name === "Default Playlist");
+      if (defaultPlaylistFolder) {
+        defaultPlaylistId = defaultPlaylistFolder.id;
+      }
+      
       for (const item of eagleItems) {
+        // Default Playlist 폴더에 있는 아이템 제외
+        if (defaultPlaylistId && item.folders && item.folders.includes(defaultPlaylistId)) {
+          continue;
+        }
+        
         const videoId = this.extractVideoId(item);
         if (videoId) {
           eagleVideoIds.add(videoId);
@@ -316,7 +329,7 @@ class LibraryMaintenance extends EventEmitter {
         }
       }
       
-      this.emit('statusUpdate', `Eagle 라이브러리에서 ${eagleVideoIds.size}개의 비디오 ID를 추출했습니다`);
+      this.emit('statusUpdate', `Eagle 라이브러리에서 ${eagleVideoIds.size}개의 비디오 ID를 추출했습니다 (Default Playlist 폴더 제외)`);
 
       // 불일치 항목 찾기
       const missingInEagle = Array.from(dbVideoIds)
@@ -347,12 +360,13 @@ class LibraryMaintenance extends EventEmitter {
       await fs.writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8');
 
       this.emit('statusUpdate', 
-        `일치성 검사 완료: DB에는 있지만 Eagle에 없는 항목 ${missingInEagle.length}개, Eagle에는 있지만 DB에 없는 항목 ${missingInDB.length}개`
+        `일치성 검사 완료: DB에는 있지만 Eagle에 없는 항목 ${missingInEagle.length}개, Eagle에는 있지만 DB에 없는 항목 ${missingInDB.length}개 (Default Playlist 폴더 제외)`
       );
       
       console.log(`일치성 검사 완료:
         - DB에는 있지만 Eagle에 없는 항목: ${missingInEagle.length}개
         - Eagle에는 있지만 DB에 없는 항목: ${missingInDB.length}개
+        - Default Playlist 폴더의 아이템은 검사에서 제외됨
         상세 내용은 ${reportPath} 참조`);
 
       return report;

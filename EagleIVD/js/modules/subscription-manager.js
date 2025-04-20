@@ -142,14 +142,16 @@ class SubscriptionManager extends EventEmitter {
       concurrency = 3,
       metadataBatchSize = 30,
       downloadBatchSize = 5,
-      rateLimit = 0
+      rateLimit = 0,
+      sourceAddress = ''
     } = options;
 
     console.log("Checking for new videos with options:", { 
       concurrency, 
       metadataBatchSize, 
       downloadBatchSize, 
-      rateLimit 
+      rateLimit,
+      sourceAddress
     });
     
     this.isChecking = true;
@@ -173,7 +175,7 @@ class SubscriptionManager extends EventEmitter {
               total - subscriptions.length - batch.length + index + 1, 
               total, 
               progressCallback,
-              { metadataBatchSize, downloadBatchSize, rateLimit }
+              { metadataBatchSize, downloadBatchSize, rateLimit, sourceAddress }
             );
           });
           
@@ -214,10 +216,12 @@ class SubscriptionManager extends EventEmitter {
       return { subscription: sub, newVideos: 0, error: null };
     }
 
+    // 옵션에 sourceAddress 추가
     const {
       metadataBatchSize = 30,
       downloadBatchSize = 5,
-      rateLimit = 0
+      rateLimit = 0,
+      sourceAddress = ''
     } = options;
     
     if (progressCallback) {
@@ -242,12 +246,20 @@ class SubscriptionManager extends EventEmitter {
       // Phase 1: 경량화된 메타데이터만 먼저 확인 (최적화된 방식)
       const phase1Args = [
         "--skip-download",
-        "--flat-playlist",  // 경량화된 플레이리스트 정보만 가져오기
+        "--flat-playlist",
         "--print-json",
         "--no-warnings",
-        "--ignore-errors",  // 오류 무시하고 계속 진행
+        "--ignore-errors",
         sub.url
       ];
+      // sourceAddress 옵션 적용
+      if (sourceAddress) {
+        phase1Args.unshift(sourceAddress);
+        phase1Args.unshift('--source-address');
+        console.log('Phase1 yt-dlp args with sourceAddress:', phase1Args);
+      } else {
+        console.log('Phase1 yt-dlp args:', phase1Args);
+      }
       
       let fetchedVideoIds = [];
       let playlistMetadata = null;
@@ -384,6 +396,14 @@ class SubscriptionManager extends EventEmitter {
             "--file-access-retries", "1", // 파일 액세스 재시도 제한
             ...batchUrls
           ];
+          // sourceAddress 옵션 적용
+          if (sourceAddress) {
+            metadataArgs.unshift(sourceAddress);
+            metadataArgs.unshift('--source-address');
+            console.log('Metadata yt-dlp args with sourceAddress:', metadataArgs);
+          } else {
+            console.log('Metadata yt-dlp args:', metadataArgs);
+          }
           
           await new Promise((resolve) => {
             const startTime = Date.now();
@@ -524,6 +544,14 @@ class SubscriptionManager extends EventEmitter {
             "--retries", "1",          // 재시도 횟수 제한
             "--file-access-retries", "1" // 파일 액세스 재시도 제한
           ];
+          // sourceAddress 옵션 적용
+          if (sourceAddress) {
+            phase3Args.unshift(sourceAddress);
+            phase3Args.unshift('--source-address');
+            console.log('Phase3 yt-dlp args with sourceAddress:', phase3Args);
+          } else {
+            console.log('Phase3 yt-dlp args:', phase3Args);
+          }
 
           // 속도 제한 적용
           if (rateLimit > 0) {
@@ -781,8 +809,9 @@ class SubscriptionManager extends EventEmitter {
             }
             // videoMetadata에서 찾지 못한 경우 YouTube ID 길이(11) 기반으로 추출
             if (!videoId) {
-              const baseName = path.basename(file, path.extname(file));
-              videoId = baseName.slice(0, 11);
+              // URL에서 video ID 추출 시도
+              const urlMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+              videoId = urlMatch ? urlMatch[1] : null;
               if (videoMetadata && videoMetadata[videoId]) {
                 currentMetadata = videoMetadata[videoId];
               }

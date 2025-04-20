@@ -253,6 +253,9 @@ eagle.onPluginCreate(async (plugin) => {
 
   // 구독 확인 기능
   window.checkAllSubscriptions = async () => {
+    // NIC 선택 값 읽기
+    const sourceAddress = document.getElementById('sourceAddressSelect').value || '';
+    console.log('Using sourceAddress:', sourceAddress);
     try {
       // 설정 값 읽기
       const metadataBatchSize = parseInt(document.getElementById('metadataBatchSize').value) || 30;
@@ -281,7 +284,8 @@ eagle.onPluginCreate(async (plugin) => {
         concurrency,
         metadataBatchSize,
         downloadBatchSize,
-        rateLimit
+        rateLimit,
+        sourceAddress
       });
       
       // 진행 상황 표시 숨김
@@ -765,6 +769,28 @@ eagle.onPluginCreate(async (plugin) => {
       });
     } else {
       console.error("일치성 보고서 보기 버튼을 찾을 수 없음");
+    }
+    
+    // NIC 목록 생성 및 옵션 추가
+    try {
+      const os = require('os');
+      const nicSelect = document.getElementById('sourceAddressSelect');
+      if (nicSelect) {
+        const nets = os.networkInterfaces();
+        Object.keys(nets).forEach(name => {
+          nets[name].forEach(net => {
+            if (net.family === 'IPv4' && !net.internal) {
+              const option = document.createElement('option');
+              option.value = net.address;
+              option.textContent = `${name} (${net.address})`;
+              nicSelect.appendChild(option);
+              console.log('Added NIC option:', name, net.address);
+            }
+          });
+        });
+      }
+    } catch (err) {
+      console.error('NIC 목록 생성 실패:', err);
     }
     
     console.log("UI 초기화 완료");
