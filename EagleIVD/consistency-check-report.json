@@ -1,13 +1,15 @@
 {
-  "timestamp": "2025-04-20T06:31:38.194Z",
+  "timestamp": "2025-04-23T12:07:14.534Z",
   "summary": {
-    "totalVideosInDB": 5,
-    "totalVideosInEagle": 5,
-    "missingInEagle": 0,
+    "totalVideosInDB": 4,
+    "totalVideosInEagle": 3,
+    "missingInEagle": 1,
     "missingInDB": 0
   },
   "details": {
-    "missingInEagle": [],
+    "missingInEagle": [
+      "HOz-9FzIDf0"
+    ],
     "missingInDB": []
   }
 }

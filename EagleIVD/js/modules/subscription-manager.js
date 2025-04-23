@@ -7,6 +7,9 @@ const fs = require("fs").promises;
 const path = require("path");
 const { spawn } = require("child_process");
 const EventEmitter = require('events');
+const subscriptionDb = require('./subscription-db');
+const SubscriptionChecker = require('./subscription-checker');
+const SubscriptionImporter = require('./subscription-importer');
 
 /**
  * 구독 관리 기본 클래스
@@ -18,10 +21,13 @@ class SubscriptionManager extends EventEmitter {
    */
   constructor(pluginPath) {
     super();
-    this.subFile = path.join(pluginPath, "subscriptions.json");
+    // SQLite DB 초기화
+    (async () => await subscriptionDb.initDatabase(pluginPath))();
     this.subscriptions = [];
     this.isChecking = false;
     this.downloadManager = null;
+    this.checker = null;
+    this.importer = new SubscriptionImporter(this.updateStatusUI.bind(this), this.prefixUploadDate);
     this.stats = {
       duplicatesFound: 0,
       duplicatesResolved: 0,
@@ -38,6 +44,7 @@ class SubscriptionManager extends EventEmitter {
    */
   setDownloadManager(downloadManager) {
     this.downloadManager = downloadManager;
+    this.checker = new SubscriptionChecker(downloadManager, this.updateStatusUI.bind(this), this.importer);
   }
 
   /**
@@ -45,22 +52,69 @@ class SubscriptionManager extends EventEmitter {
    * @returns {Promise<Array>} 구독 목록
    */
   async loadSubscriptions() {
-    try {
-      const content = await fs.readFile(this.subFile, "utf8");
-      this.subscriptions = JSON.parse(content);
-    } catch (e) {
-      console.log("No subscriptions file or read error, starting fresh");
-      this.subscriptions = [];
-    }
+    // DB에서 모든 플레이리스트 조회
+    this.subscriptions = await subscriptionDb.getAllPlaylists();
     return this.subscriptions;
   }
 
   /**
    * 구독 목록 저장
+   * @param {Array} [results=[]] - checkAllSubscriptions 결과 배열
    * @returns {Promise<void>}
    */
-  async saveSubscriptions() {
-    await fs.writeFile(this.subFile, JSON.stringify(this.subscriptions, null, 2), "utf8");
+  async saveSubscriptions(results = []) {
+    // 결과를 구독 ID 기준으로 쉽게 찾기 위한 Map 생성
+    const resultMap = new Map();
+    if (results && Array.isArray(results)) {
+        results.forEach(r => {
+            if (r && r.subscription && r.subscription.id) {
+                resultMap.set(r.subscription.id, r);
+            }
+        });
+    }
+
+    for (const sub of this.subscriptions) {
+        const result = resultMap.get(sub.id);
+        const updateData = {
+            youtube_title: sub.youtube_title, // DB에서 로드된 값 사용 또는 result에서 가져올 수도 있음
+            auto_download: sub.auto_download, // DB에서 로드된 값 사용
+            skip: sub.skip // DB에서 로드된 값 사용
+        };
+
+        // DB에서 현재 플레이리스트의 실제 비디오 개수 조회
+        try {
+            const videosInDb = await subscriptionDb.getVideosByPlaylist(sub.id);
+            updateData.videos = videosInDb.length;
+            console.log(`[SaveSubs] Playlist ${sub.id}: Found ${updateData.videos} videos in DB.`);
+        } catch (dbError) {
+            console.error(`[SaveSubs] Failed to get video count for playlist ${sub.id}:`, dbError);
+            updateData.videos = sub.videos; // 에러 시 DB에서 로드된 값 유지
+        }
+
+        if (result && result.subscription) {
+            // checkSubscription에서 lastCheck를 설정했으므로 result에서 가져옴
+            updateData.last_checked = result.subscription.lastCheck || new Date().toISOString();
+            if (result.stats && result.stats.totalVideosFound !== undefined) {
+                updateData.videos_from_yt = result.stats.totalVideosFound;
+            } else {
+                updateData.videos_from_yt = sub.videos_from_yt; // 확인 결과에 없으면 DB값 유지
+            }
+             // 제목 업데이트 (선택 사항 - checkSubscription 결과에 playlistMetadata가 있다면 사용 가능)
+             // const playlistTitleFromResult = result.subscription.title; // checker가 title을 업데이트했다면
+             // if (playlistTitleFromResult) updateData.youtube_title = playlistTitleFromResult;
+        } else {
+            // 확인 결과가 없는 경우 (예: 확인 중단) 기존 값 유지
+            updateData.last_checked = sub.last_checked;
+            updateData.videos_from_yt = sub.videos_from_yt;
+        }
+
+        // console.log(`[SaveSubs] Updating playlist ${sub.id} with:`, updateData);
+        try {
+            await subscriptionDb.updatePlaylist(sub.id, updateData);
+        } catch (updateError) {
+            console.error(`[SaveSubs] Failed to update playlist ${sub.id}:`, updateError, updateData);
+        }
+    }
   }
 
   /**
@@ -84,30 +138,37 @@ class SubscriptionManager extends EventEmitter {
       quality: quality || "",
       videoIds: [],
       title: "",
-      lastCheck: null
+      lastCheck: null,
+      autoDownload: false,
+      skip: false
     };
 
-    // 구독 정보를 가져오는 부분
+    // 메타데이터 취득
     try {
       const metadata = await this.downloadManager.getMetadata(url);
       if (metadata) {
         newSub.title = metadata.playlist_title || metadata.playlist || this.getPlaylistId(url);
-        // 구독 추가 시 전체 영상 ID 목록을 저장
-        if (metadata.entries && metadata.entries.length > 0) {
-          newSub.videoIds = metadata.entries.map(entry => entry.id);
-        } else {
-          newSub.videoIds = [];
-        }
+        if (metadata.entries) newSub.videoIds = metadata.entries.map(e => e.id);
+        newSub.videosFromYT = newSub.videoIds.length;
       }
-    } catch (error) {
-      console.error("Error fetching playlist metadata:", error);
-      // 메타데이터를 가져오는 데 실패한 경우에도 기본적인 정보로 구독을 추가
-      newSub.title = url; // URL을 타이틀로 사용하거나, 다른 기본값을 설정
-      newSub.videoIds = []; // 비디오 ID를 빈 배열로 설정
+    } catch {
+      newSub.title = url;
     }
 
+    // DB에 추가
+    const id = await subscriptionDb.addPlaylist({
+      user_title: newSub.folderName || newSub.title,
+      youtube_title: newSub.title,
+      videos_from_yt: newSub.videoIds.length,
+      videos: newSub.videoIds.length,
+      url: newSub.url,
+      format: newSub.format,
+      quality: newSub.quality,
+      auto_download: newSub.autoDownload,
+      skip: newSub.skip
+    });
+    newSub.id = id;
     this.subscriptions.push(newSub);
-    await this.saveSubscriptions();
 
     console.log(`Subscribed to playlist: ${newSub.title} (${url})`);
     this.emit('subscriptionAdded', newSub);
@@ -121,8 +182,9 @@ class SubscriptionManager extends EventEmitter {
   async removeSubscription(url) {
     const subscription = this.subscriptions.find(s => s.url === url);
     if (subscription) {
+      // DB에서도 삭제
+      await subscriptionDb.deletePlaylist(subscription.id);
       this.subscriptions = this.subscriptions.filter(s => s.url !== url);
-      await this.saveSubscriptions();
       console.log("Unsubscribed from playlist:", url);
       this.emit('subscriptionRemoved', subscription);
     } else {
@@ -131,80 +193,18 @@ class SubscriptionManager extends EventEmitter {
   }
 
   /**
-   * 모든 구독 확인 및 새 비디오 다운로드
+   * 모든 구독 확인
    * @param {Function} progressCallback - 진행 상황 콜백 함수
    * @param {Object} options - 다운로드 옵션
-   * @param {number} options.concurrency - 동시 처리할 최대 구독 수 (기본값: 3)
-   * @param {number} options.metadataBatchSize - 메타데이터 배치 크기 (기본값: 30)
-   * @param {number} options.downloadBatchSize - 다운로드 배치 크기 (기본값: 5)
-   * @param {number} options.rateLimit - 다운로드 속도 제한 (KB/s, 0=무제한)
    * @returns {Promise<void>}
    */
   async checkAllSubscriptions(progressCallback, options = {}) {
-    if (this.isChecking) {
-      console.log("Already checking subscriptions. Please wait.");
-      return;
-    }
-
-    const {
-      concurrency = 3,
-      metadataBatchSize = 30,
-      downloadBatchSize = 5,
-      rateLimit = 0,
-      sourceAddress = ''
-    } = options;
-
-    console.log("Checking for new videos with options:", { 
-      concurrency, 
-      metadataBatchSize, 
-      downloadBatchSize, 
-      rateLimit,
-      sourceAddress
-    });
-    
-    this.isChecking = true;
-    const total = this.subscriptions.length;
-    
-    try {
-      // 구독 목록을 배열로 복사
-      const subscriptions = [...this.subscriptions];
-      const results = [];
-      
-      // 병렬 처리를 위한 함수
-      const processInBatches = async () => {
-        // concurrency 단위로 처리할 배치 생성
-        while (subscriptions.length > 0 && this.isChecking) {
-          const batch = subscriptions.splice(0, concurrency);
-          
-          // 배치 내의 구독을 병렬로 처리
-          const batchPromises = batch.map((sub, index) => {
-            return this.checkSubscription(
-              sub, 
-              total - subscriptions.length - batch.length + index + 1, 
-              total, 
-              progressCallback,
-              { metadataBatchSize, downloadBatchSize, rateLimit, sourceAddress }
-            );
-          });
-          
-          // 현재 배치의 모든 작업이 완료될 때까지 대기
-          const batchResults = await Promise.all(batchPromises);
-          results.push(...batchResults);
-        }
-      };
-      
-      await processInBatches();
-      
-      // 결과 요약
-      const newVideosCount = results.filter(r => r.newVideos > 0).length;
-      console.log(`Checked ${total} subscriptions, found new videos in ${newVideosCount} playlists.`);
-      this.updateStatusUI(`구독 확인 완료: ${total}개 중 ${newVideosCount}개에서 새 영상 발견`);
-      
-    } finally {
-      this.isChecking = false;
-      console.log("Finished checking all subscriptions.");
-      this.emit('checkComplete');
-    }
+    await this.loadSubscriptions();
+    // checker.checkAllSubscriptions 결과를 results 변수에 저장
+    const results = await this.checker.checkAllSubscriptions(this.subscriptions, progressCallback, options);
+    // 결과를 saveSubscriptions에 전달
+    await this.saveSubscriptions(results);
+    this.emit('checkComplete');
   }
 
   /**
@@ -220,459 +220,7 @@ class SubscriptionManager extends EventEmitter {
    * @returns {Promise<object>} 구독 확인 결과 객체
    */
   async checkSubscription(sub, current, total, progressCallback, options = {}) {
-    if (!this.isChecking) {
-      return { subscription: sub, newVideos: 0, error: null };
-    }
-
-    // 옵션에 sourceAddress 추가
-    const {
-      metadataBatchSize = 30,
-      downloadBatchSize = 5,
-      rateLimit = 0,
-      sourceAddress = ''
-    } = options;
-    
-    if (progressCallback) {
-      progressCallback(
-        current,
-        total,
-        `플레이리스트 확인 중: ${sub.title || sub.url}`
-      );
-    }
-    
-    // 결과 통계 초기화
-    const stats = {
-      totalVideosFound: 0,
-      newVideosFound: 0,
-      processedVideos: 0,
-      downloadedVideos: 0,
-      skippedVideos: 0,
-      errorVideos: 0
-    };
-    
-    try {
-      // Phase 1: 경량화된 메타데이터만 먼저 확인 (최적화된 방식)
-      const phase1Args = [
-        "--skip-download",
-        "--flat-playlist",
-        "--print-json",
-        "--no-warnings",
-        "--ignore-errors",
-        sub.url
-      ];
-      // sourceAddress 옵션 적용
-      if (sourceAddress) {
-        phase1Args.unshift(sourceAddress);
-        phase1Args.unshift('--source-address');
-        console.log('Phase1 yt-dlp args with sourceAddress:', phase1Args);
-      } else {
-        console.log('Phase1 yt-dlp args:', phase1Args);
-      }
-      
-      let fetchedVideoIds = [];
-      let playlistMetadata = null;
-      
-      await new Promise((resolve, reject) => {
-        const phase1Process = spawn(this.downloadManager.ytDlpPath, phase1Args);
-        
-        let buffer = '';
-        phase1Process.stdout.on("data", (data) => {
-          // 스트림 데이터를 버퍼에 축적
-          buffer += data.toString();
-          
-          // 완전한 JSON 객체가 포함된 라인만 처리
-          const lines = buffer.split("\n");
-          // 마지막 라인은 불완전할 수 있으므로 버퍼에 다시 저장
-          buffer = lines.pop() || '';
-          
-          // 완전한 라인 처리
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            
-            try {
-              if (line.startsWith("{")) {
-                const item = JSON.parse(line);
-                
-                if (!playlistMetadata) {
-                  playlistMetadata = item;
-                }
-                
-                // 확실한 ID 정보만 추출
-                if (item.id) {
-                  fetchedVideoIds.push(item.id);
-                }
-              }
-            } catch (e) {
-              console.error("Phase1 JSON parse error:", e);
-              // JSON 파싱 오류는 무시하고 계속 진행
-            }
-          }
-        });
-        
-        phase1Process.stderr.on("data", (data) => {
-          const errorMsg = data.toString();
-          console.error("Phase1 yt-dlp stderr:", errorMsg);
-          
-          // 비공개 영상 등 경고 로그
-          if (errorMsg.includes("Private video") || errorMsg.includes("This video is unavailable")) {
-            this.updateStatusUI(`경고: ${sub.title || sub.url}에 접근할 수 없는 영상이 포함되어 있습니다`);
-            stats.skippedVideos++;
-          }
-        });
-        
-        phase1Process.on("close", (code) => {
-          // 남은 버퍼 처리
-          if (buffer.trim()) {
-            try {
-              const item = JSON.parse(buffer);
-              if (item.id && !fetchedVideoIds.includes(item.id)) {
-                fetchedVideoIds.push(item.id);
-              }
-            } catch (e) {
-              console.error("Buffer JSON parse error:", e);
-            }
-          }
-          
-          // 오류가 있어도 가져온 데이터로 계속 진행
-          if (fetchedVideoIds.length > 0) {
-            stats.totalVideosFound = fetchedVideoIds.length;
-            resolve();
-          } else if (code !== 0 && code !== null) {
-            // 전혀 가져오지 못한 경우에만 오류로 처리
-            reject(new Error(`Phase1: yt-dlp exited with code ${code}`));
-          } else {
-            // 영상이 없는 경우 정상 종료
-            resolve();
-          }
-        });
-      });
-      
-      // 새 비디오 ID 필터링 (메모리 효율적 방식)
-      const videoIdSet = new Set(sub.videoIds); // O(1) 조회를 위한 Set 사용
-      const newVideoIds = fetchedVideoIds.filter(id => !videoIdSet.has(id));
-      stats.newVideosFound = newVideoIds.length;
-      
-      console.log(`플레이리스트 ${sub.title || sub.url}: 총 ${fetchedVideoIds.length}개 중 ${newVideoIds.length}개 새 영상 발견${stats.skippedVideos > 0 ? `, ${stats.skippedVideos}개 영상 건너뜀` : ''}`);
-      
-      if (newVideoIds.length === 0) {
-        this.updateStatusUI(`${sub.title || sub.url}: 새 영상 없음${stats.skippedVideos > 0 ? ` (${stats.skippedVideos}개 영상 건너뜀)` : ''}`);
-        return { subscription: sub, newVideos: 0, error: null, stats };
-      }
-      
-      this.updateStatusUI(`${sub.title || sub.url}: ${newVideoIds.length}개의 새 영상 발견`);
-      
-      // 새 영상이 있을 때만 임시 폴더 생성
-      const playlistId = this.getPlaylistId(sub.url);
-      const tempFolder = path.join(
-        this.downloadManager.downloadFolder,
-        "subscription_" + playlistId
-      );
-      
-      try {
-        // 폴더 생성 시도
-        await fs.mkdir(tempFolder, { recursive: true });
-        console.log(`임시 폴더 생성됨: ${tempFolder}`);
-        
-        // Phase 2: 새 영상의 자세한 메타데이터 취득 (다운로드 없이)
-        // 새 영상 URL 목록 구성 (metadataBatchSize 단위로 처리)
-        const videoUrlBatches = [];
-        
-        for (let i = 0; i < newVideoIds.length; i += metadataBatchSize) {
-          videoUrlBatches.push(
-            newVideoIds.slice(i, i + metadataBatchSize).map(id => `https://www.youtube.com/watch?v=${id}`)
-          );
-        }
-        
-        const downloadedVideoIds = [];
-        const downloadedMetadata = {};
-        let failedVideoIds = [];
-        
-        // 새 영상 메타데이터 일괄 처리
-        for (let i = 0; i < videoUrlBatches.length; i++) {
-          const batchUrls = videoUrlBatches[i];
-          this.updateStatusUI(`${sub.title || sub.url}: 새 영상 메타데이터 가져오는 중 (${i+1}/${videoUrlBatches.length})`);
-          
-          // 메타데이터 가져오기 (배치 단위)
-          const metadataArgs = [
-            "--skip-download",
-            "--print-json",
-            "--no-warnings",
-            "--ignore-errors",  // 오류 무시하고 계속 진행
-            "--newline",
-            "--socket-timeout", "30",  // 소켓 타임아웃 설정 (초)
-            "--retries", "1",          // 재시도 횟수 제한
-            "--file-access-retries", "1", // 파일 액세스 재시도 제한
-            ...batchUrls
-          ];
-          // sourceAddress 옵션 적용
-          if (sourceAddress) {
-            metadataArgs.unshift(sourceAddress);
-            metadataArgs.unshift('--source-address');
-            console.log('Metadata yt-dlp args with sourceAddress:', metadataArgs);
-          } else {
-            console.log('Metadata yt-dlp args:', metadataArgs);
-          }
-          
-          await new Promise((resolve) => {
-            const startTime = Date.now();
-            console.log(`메타데이터 배치 ${i+1}/${videoUrlBatches.length} 처리 시작 - ${batchUrls.length}개 URL`);
-            
-            const metadataProcess = spawn(this.downloadManager.ytDlpPath, metadataArgs);
-            let metaBuffer = '';
-            
-            // 타임아웃 설정 (3분)
-            const timeoutId = setTimeout(() => {
-              console.log(`메타데이터 배치 ${i+1} 처리 타임아웃 - 20초 초과`);
-              this.updateStatusUI(`경고: 메타데이터 처리 타임아웃 - 다음 배치로 진행합니다`);
-              
-              if (metadataProcess.exitCode === null) {
-                metadataProcess.kill();
-              }
-              resolve(); // 타임아웃이어도 다음 단계로 진행
-            }, 20000); // 20 = 20000ms
-            
-            metadataProcess.stdout.on("data", (data) => {
-              metaBuffer += data.toString();
-              
-              const lines = metaBuffer.split("\n");
-              metaBuffer = lines.pop() || '';
-              
-              for (const line of lines) {
-                if (!line.trim()) continue;
-                
-                try {
-                  if (line.startsWith("{")) {
-                    const item = JSON.parse(line);
-                    if (item.id && !downloadedVideoIds.includes(item.id)) {
-                      downloadedVideoIds.push(item.id);
-                      downloadedMetadata[item.id] = item; // 메타데이터 저장
-                      stats.processedVideos++;
-                      
-                      // 진행 상황 업데이트 (10개마다)
-                      if (stats.processedVideos % 10 === 0) {
-                        console.log(`현재까지 ${stats.processedVideos}개 영상 메타데이터 처리됨`);
-                      }
-                    }
-                  }
-                } catch (e) {
-                  console.error("Metadata JSON parse error:", e);
-                }
-              }
-            });
-            
-            metadataProcess.stderr.on("data", (data) => {
-              const errorMsg = data.toString();
-              console.error("Metadata yt-dlp stderr:", errorMsg);
-              
-              // 오류 영상 ID 추출 시도
-              const errorVideoMatch = errorMsg.match(/ERROR: \[youtube\] ([^:]+):/);
-              if (errorVideoMatch && errorVideoMatch[1]) {
-                const errorVideoId = errorVideoMatch[1];
-                failedVideoIds.push(errorVideoId);
-                stats.errorVideos++;
-                this.updateStatusUI(`경고: 영상 [${errorVideoId}] 접근 불가 - 건너뜁니다`);
-                console.log(`영상 [${errorVideoId}] 접근 불가 - 오류: ${errorMsg.split('\n')[0]}`);
-              }
-              
-              // 비공개 영상 등 경고 로그
-              if (errorMsg.includes("Private video") || errorMsg.includes("This video is unavailable")) {
-                this.updateStatusUI(`경고: 접근할 수 없는 영상이 있습니다. 건너뜁니다.`);
-                stats.skippedVideos++;
-              }
-            });
-            
-            metadataProcess.on("close", (code) => {
-              clearTimeout(timeoutId); // 타임아웃 해제
-              
-              const endTime = Date.now();
-              const elapsedTime = (endTime - startTime) / 1000; // 초 단위
-              console.log(`메타데이터 배치 ${i+1} 처리 완료 - 소요시간: ${elapsedTime.toFixed(1)}초, 종료 코드: ${code}`);
-              
-              if (metaBuffer.trim()) {
-                try {
-                  const item = JSON.parse(metaBuffer);
-                  if (item.id && !downloadedVideoIds.includes(item.id)) {
-                    downloadedVideoIds.push(item.id);
-                    downloadedMetadata[item.id] = item;
-                    stats.processedVideos++;
-                  }
-                } catch (e) {
-                  console.error("Metadata buffer parse error:", e);
-                }
-              }
-              
-              // 항상 resolve하여 계속 진행
-              resolve();
-            });
-          });
-        }
-        
-        // 모든 영상이 실패한 경우
-        if (downloadedVideoIds.length === 0) {
-          this.updateStatusUI(`${sub.title || sub.url}: 모든 새 영상을 처리할 수 없습니다. 건너뜁니다.`);
-          
-          // 영상 ID를 기존 목록에 추가 (다음 체크에서 다시 시도하지 않도록)
-          if (failedVideoIds.length > 0) {
-            sub.videoIds = Array.from(new Set([...sub.videoIds, ...failedVideoIds]));
-            await this.saveSubscriptions();
-            console.log(`실패한 영상 ID ${failedVideoIds.length}개가 구독 목록에 추가되었습니다.`);
-          }
-          
-          return { 
-            subscription: sub, 
-            newVideos: 0,
-            skippedVideos: stats.skippedVideos,
-            errorVideos: stats.errorVideos,
-            stats,
-            error: `${stats.errorVideos}개 영상 접근 불가`,
-          };
-        }
-        
-        // Phase 3: 실제 다운로드 (새 영상만)
-        this.updateStatusUI(`${sub.title || sub.url}: ${downloadedVideoIds.length}개 영상 다운로드 시작`);
-        
-        // 영상을 downloadBatchSize 단위로 나누어 다운로드
-        const downloadedFiles = [];
-        const successfullyDownloadedIds = [];
-        
-        for (let i = 0; i < downloadedVideoIds.length; i += downloadBatchSize) {
-          const batchIds = downloadedVideoIds.slice(i, i + downloadBatchSize);
-          const batchUrls = batchIds.map(id => `https://www.youtube.com/watch?v=${id}`);
-          
-          this.updateStatusUI(`${sub.title || sub.url}: 영상 다운로드 중 (${i+1}-${Math.min(i+downloadBatchSize, downloadedVideoIds.length)}/${downloadedVideoIds.length})`);
-          
-          const phase3Args = [
-            "--ffmpeg-location", this.downloadManager.ffmpegPath,
-            "-o", `${tempFolder}/%(id)s_%(title)s.%(ext)s`,
-            "--progress",
-            "--no-warnings",
-            "--ignore-errors",  // 오류 무시하고 계속 진행
-            "--newline",
-            "--socket-timeout", "30",  // 소켓 타임아웃 설정 (초)
-            "--retries", "1",          // 재시도 횟수 제한
-            "--file-access-retries", "1" // 파일 액세스 재시도 제한
-          ];
-          // sourceAddress 옵션 적용
-          if (sourceAddress) {
-            phase3Args.unshift(sourceAddress);
-            phase3Args.unshift('--source-address');
-            console.log('Phase3 yt-dlp args with sourceAddress:', phase3Args);
-          } else {
-            console.log('Phase3 yt-dlp args:', phase3Args);
-          }
-
-          // 속도 제한 적용
-          if (rateLimit > 0) {
-            phase3Args.push("--limit-rate", `${rateLimit}K`);
-          }
-
-          // 포맷 및 품질 설정 추가
-          if (sub.format === "mp3") {
-            phase3Args.push("-x", "--audio-format", "mp3");
-          } else if (sub.format === "best") {
-            phase3Args.push("-f", "bv*+ba/b");
-          } else {
-            let formatString = sub.format;
-            if (sub.quality) {
-              formatString += `-${sub.quality}`;
-            }
-            phase3Args.push("-f", formatString);
-          }
-
-          // 배치 URL 추가
-          phase3Args.push(...batchUrls);
-          
-          await new Promise((resolve) => {
-            const phase3Process = spawn(this.downloadManager.ytDlpPath, phase3Args);
-            
-            phase3Process.stdout.on("data", (data) => {
-              const output = data.toString();
-              this.updateProgress(output);
-              
-              // 다운로드 완료된 파일 ID 추출 시도
-              if (output.includes("[download] 100%")) {
-                const downloadMatch = output.match(/\[download\] 100%.+Destination: .+\/([^_]+)_/);
-                if (downloadMatch && downloadMatch[1]) {
-                  successfullyDownloadedIds.push(downloadMatch[1]);
-                  stats.downloadedVideos++;
-                }
-              }
-            });
-            
-            phase3Process.stderr.on("data", (data) => {
-              const errorMsg = data.toString();
-              console.error("Download yt-dlp stderr:", errorMsg);
-              
-              // 오류 영상 ID 추출 시도
-              const errorVideoMatch = errorMsg.match(/ERROR: \[youtube\] ([^:]+):/);
-              if (errorVideoMatch && errorVideoMatch[1]) {
-                stats.errorVideos++;
-                this.updateStatusUI(`경고: 영상 다운로드 실패: ${errorVideoMatch[1]}`);
-              }
-            });
-            
-            phase3Process.on("close", () => {
-              // 항상 resolve하여 계속 진행
-              resolve();
-            });
-          });
-        }
-        
-        // 모든 영상이 실패한 경우 체크
-        if (successfullyDownloadedIds.length === 0 && downloadedVideoIds.length > 0) {
-          this.updateStatusUI(`${sub.title || sub.url}: 모든 영상 다운로드에 실패했습니다.`);
-        } else {
-          console.log(`${sub.title || sub.url}: ${successfullyDownloadedIds.length}/${downloadedVideoIds.length}개 영상 다운로드 완료`);
-        }
-        
-        // 기존 videoIds와 모든 시도한 영상 ID 병합 (성공한 것과 실패한 것 모두)
-        sub.videoIds = Array.from(new Set([...sub.videoIds, ...downloadedVideoIds]));
-        sub.lastCheck = Date.now();
-        await this.saveSubscriptions();
-        
-        // 수집된 개별 메타데이터와 함께 파일 임포트
-        await this.importAndRemoveDownloadedFiles(
-          tempFolder, 
-          sub.url, 
-          playlistMetadata, 
-          sub.folderName, 
-          downloadedMetadata
-        );
-        
-        return { 
-          subscription: sub, 
-          newVideos: stats.downloadedVideos, 
-          skippedVideos: stats.skippedVideos,
-          errorVideos: stats.errorVideos,
-          stats,
-          error: null 
-        };
-      } finally {
-        // 임시 폴더 삭제 (오류가 발생해도 항상 실행)
-        try {
-          await fs.rm(tempFolder, { recursive: true, force: true });
-          console.log(`임시 폴더 삭제됨: ${tempFolder}`);
-        } catch (error) {
-          console.error(`임시 폴더 삭제 실패: ${tempFolder}`, error);
-        }
-      }
-    } catch (error) {
-      console.error(
-        `재생목록 확인 중 오류 발생 ${sub.title || sub.url}:`,
-        error
-      );
-      this.updateStatusUI(
-        `재생목록 확인 중 오류: ${sub.title || sub.url}: ${error.message}`
-      );
-      return { 
-        subscription: sub, 
-        newVideos: 0, 
-        skippedVideos: stats.skippedVideos,
-        errorVideos: stats.errorVideos,
-        stats,
-        error: error.message 
-      };
-    }
+    return await this.checker.checkSubscription(sub, current, total, progressCallback, options);
   }
 
   /**
@@ -739,156 +287,7 @@ class SubscriptionManager extends EventEmitter {
    * @returns {Promise<void>}
    */
   async importAndRemoveDownloadedFiles(folder, url, metadata, customFolderName, videoMetadata = {}) {
-    try {
-      const files = await fs.readdir(folder);
-      console.log("Files in directory:", files);
-
-      // 폴더명 결정: customFolderName 우선, 없으면 fallback
-      const folderName = customFolderName && customFolderName.trim() ? 
-        customFolderName : (metadata.playlist || this.getPlaylistId(url) || "Default Playlist");
-
-      // 먼저 기존에 동일 이름의 폴더가 있는지 검색 (keyword대신 name으로 정확히 매칭)
-      let playlistFolderId = null;
-      console.log(`Looking for existing folder: "${folderName}"`);
-      
-      try {
-        // 정확한 이름으로 폴더 검색 (Eagle API의 keyword 대신 정확한 이름 비교)
-        const allFolders = await eagle.folder.getAll();
-        console.log(`Total folders: ${allFolders.length}`);
-        
-        // 이름이 정확히 일치하는 폴더 찾기
-        const exactMatchFolders = allFolders.filter(f => f.name === folderName);
-        console.log(`Found ${exactMatchFolders.length} folders with exact name match: "${folderName}"`);
-        
-        if (exactMatchFolders.length > 0) {
-          // 이미 존재하는 폴더 재사용 (여러 개 있으면 첫 번째 것 사용)
-          playlistFolderId = exactMatchFolders[0].id;
-          console.log(`Using existing folder: "${folderName}" (ID: ${playlistFolderId})`);
-        } else {
-          // 일치하는 폴더가 없으면 새로 생성
-          try {
-            const newFolder = await eagle.folder.create({ name: folderName });
-            playlistFolderId = newFolder.id;
-            console.log(`Created new folder: "${folderName}" (ID: ${playlistFolderId})`);
-          } catch (createError) {
-            // 혹시 생성 중에 오류가 발생하면, 다시 검색하여 마지막으로 생성됐을 가능성 있는 폴더 찾기
-            if (createError.message.includes("already exists")) {
-              const updatedFolders = await eagle.folder.getAll();
-              const newExactMatchFolders = updatedFolders.filter(f => f.name === folderName);
-              if (newExactMatchFolders.length > 0) {
-                playlistFolderId = newExactMatchFolders[0].id;
-                console.log(`Using newly found folder: "${folderName}" (ID: ${playlistFolderId})`);
-              }
-            } else {
-              throw createError;
-            }
-          }
-        }
-        
-        if (!playlistFolderId) {
-          console.error(`Failed to create or find folder: "${folderName}"`);
-        }
-      } catch (error) {
-        console.error(`Error in folder operations:`, error);
-        throw error;
-      }
-
-      // 파일 추가
-      for (const file of files) {
-        // .txt 파일 건너뛰기 (여전히 임시 파일이 있을 경우 대비)
-        if (file.endsWith(".txt")) continue;
-        
-        const filePath = path.join(folder, file);
-        try {
-          const fileStat = await fs.stat(filePath);
-          if (fileStat.isFile()) {
-            // 파일명에서 videoId 추출: 언더바(_)가 포함된 ID도 정확히 처리
-            let videoId = null;
-            let currentMetadata = metadata; // 기본 메타데이터
-            // videoMetadata 매핑에 기반하여 파일명이 해당 ID로 시작하는지 확인
-            if (videoMetadata) {
-              for (const id of Object.keys(videoMetadata)) {
-                if (file.startsWith(`${id}_`)) {
-                  videoId = id;
-                  currentMetadata = videoMetadata[id];
-                  break;
-                }
-              }
-            }
-            // videoMetadata에서 찾지 못한 경우 YouTube ID 길이(11) 기반으로 추출
-            if (!videoId) {
-              // URL에서 video ID 추출 시도
-              const urlMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-              videoId = urlMatch ? urlMatch[1] : null;
-              if (videoMetadata && videoMetadata[videoId]) {
-                currentMetadata = videoMetadata[videoId];
-              }
-            }
-            // 파일 제목: "{videoId}_제목"에서 ID 부분 제거
-            let videoTitle = path.basename(file, path.extname(file));
-            if (videoTitle.startsWith(`${videoId}_`)) {
-              videoTitle = videoTitle.substring(videoId.length + 1);
-            }
-
-            // 제목 앞에 업로드 날짜를 붙이도록 설정된 경우 처리
-            let displayName = videoTitle;
-            if (this.prefixUploadDate && currentMetadata.upload_date) {
-              displayName = currentMetadata.upload_date + ' ' + videoTitle;
-            }
-            const fileMetadata = {
-              name: displayName,
-              website: videoId ? `https://www.youtube.com/watch?v=${videoId}` : url,
-              annotation: `Video ID: ${videoId || 'N/A'}
-Upload Date: ${currentMetadata.upload_date || "N/A"}
-Views: ${currentMetadata.view_count || "N/A"}`,
-              tags: [
-                `Platform: ${url.includes("youtube.com") || url.includes("youtu.be") ? "youtube.com" : new URL(url).hostname}`,
-                `Playlist: ${folderName}`,
-                `Channel: ${currentMetadata.uploader || "N/A"}`
-              ].filter(Boolean), // null 값 필터링
-              folders: playlistFolderId ? [playlistFolderId] : []
-            };
-
-            // Eagle 라이브러리에 추가
-            try {
-              const item = await eagle.item.addFromPath(filePath, fileMetadata);
-              console.log(`Added ${file} to Eagle`, item);
-              this.emit('videoAdded', { file, metadata: fileMetadata });
-            } catch (addError) {
-              if (addError.message.includes("Item already exists")) {
-                console.log(`${file} already exists in Eagle library. Adding to folder.`);
-                
-                // URL로 아이템 검색 (videoId가 있으면 개별 영상 URL, 없으면 재생목록 URL)
-                const searchURL = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
-                const items = await eagle.item.get({ website: searchURL });
-                
-                if (items.length > 0) {
-                  const item = items[0];
-                  let newFolders = item.folders || [];
-                  if (playlistFolderId && !newFolders.includes(playlistFolderId)) {
-                    newFolders.push(playlistFolderId);
-                  }
-                  await eagle.item.modify(item.id, { folders: newFolders });
-                  console.log(`Updated item ${item.id} to include folder ${playlistFolderId}`);
-                } else {
-                  console.error(`Failed to find item with URL ${searchURL}`);
-                }
-              } else {
-                throw addError;
-              }
-            }
-
-            // 처리 완료된 파일 삭제
-            await fs.unlink(filePath);
-            console.log(`Removed ${file} from downloads folder`);
-          }
-        } catch (error) {
-          console.error(`Error adding or removing file ${file}:`, error);
-        }
-      }
-    } catch (error) {
-      console.error("Error reading or deleting files in directory:", error);
-    }
+    return await this.importer.importAndRemoveDownloadedFiles(folder, url, metadata, customFolderName, videoMetadata);
   }
 
   /**
@@ -920,7 +319,7 @@ Views: ${currentMetadata.view_count || "N/A"}`,
       console.debug("updateUI called with message:", message);
     } else {
       // 일반 메시지는 log 레벨로 출력
-      console.log("updateUI called with message:", message);
+    console.log("updateUI called with message:", message);
     }
     
     if (window.updateUI) {

@@ -2,7 +2,13 @@
   "dependencies": {
     "axion": "^0.1.0",
     "axios": "^1.7.9",
+    "better-sqlite3": "^11.9.1",
     "nedb-promises": "^6.2.3",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
     "youtube-dl-exec": "^3.0.12"
+  },
+  "devDependencies": {
+    "electron-rebuild": "^3.2.9"
   }
 }

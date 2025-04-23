@@ -296,7 +296,7 @@ eagle.onPluginCreate(async (plugin) => {
       document.getElementById("downloadProgress").classList.add("hidden");
     }
   };
-  
+
   // 자동 체크 시작
   window.startAutoCheck = async (intervalMinutes) => {
     try {
@@ -307,22 +307,22 @@ eagle.onPluginCreate(async (plugin) => {
       const rateLimit = parseInt(document.getElementById('rateLimit').value) || 0;
       
       // 자동 체크 시작
-      subscriptionManager.startAutoCheck(intervalMinutes);
+    subscriptionManager.startAutoCheck(intervalMinutes);
       
       // 버튼 상태 업데이트
-      uiController.updateAutoCheckButtonsState(true);
+    uiController.updateAutoCheckButtonsState(true);
       uiController.updateStatusUI(`자동 확인 시작됨 (${intervalMinutes}분 간격)`);
     } catch (error) {
       console.error("Failed to start auto check:", error);
       uiController.showError(`Failed to start auto check: ${error.message}`);
     }
   };
-  
+
   // 자동 체크 중지
   window.stopAutoCheck = () => {
     try {
-      subscriptionManager.stopAutoCheck();
-      uiController.updateAutoCheckButtonsState(false);
+    subscriptionManager.stopAutoCheck();
+    uiController.updateAutoCheckButtonsState(false);
       uiController.updateStatusUI("자동 확인 중지됨");
     } catch (error) {
       console.error("Failed to stop auto check:", error);
@@ -735,6 +735,20 @@ eagle.onPluginCreate(async (plugin) => {
     } else {
       console.error("불일치 항목 수정 버튼을 찾을 수 없음");
     }
+
+    // DB에서 불일치 항목 삭제 버튼
+    const removeInconsistenciesBtn = document.getElementById('removeInconsistenciesBtn');
+    if (removeInconsistenciesBtn) {
+      console.log("DB에서 불일치 항목 삭제 버튼 찾음");
+      removeInconsistenciesBtn.addEventListener('click', async () => {
+        if (!confirm('정말로 DB에서 불일치 항목을 삭제하시겠습니까?')) {
+          return;
+        }
+        await libraryMaintenance.removeInconsistenciesFromDB();
+      });
+    } else {
+      console.error("DB에서 불일치 항목 삭제 버튼을 찾을 수 없음");
+    }
     
     // 유지 관리 취소 버튼
     const cancelMaintenanceBtn = document.getElementById('cancelMaintenanceBtn');
@@ -802,7 +816,7 @@ eagle.onPluginCreate(async (plugin) => {
         console.log('설정 - 제목 앞에 업로드날짜 붙이기:', prefixChk.checked);
       });
     }
-
+    
     console.log("UI 초기화 완료");
   }
 

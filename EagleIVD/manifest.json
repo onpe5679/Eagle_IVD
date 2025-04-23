@@ -1,6 +1,6 @@
 {
     "id": "4e5dc7dd-69af-430a-a9f1-279ea9802b10",
-    "version": "1.0.0",
+    "version": "1.1",
     "platform": "Windows",
     "arch": "all",
     "name": "Eagle Internet Video dowloader",
@@ -9,7 +9,7 @@
     "devTools": false,
     "main": {
         "url": "index.html",
-        "width": 1280,
-        "height": 720
+        "width": 1900,
+        "height": 1200
     }
 }

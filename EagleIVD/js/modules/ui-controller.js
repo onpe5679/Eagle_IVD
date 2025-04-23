@@ -43,65 +43,72 @@ function updateSubscriptionListUI(subscriptions) {
   const subscriptionList = document.getElementById("subscriptionList");
   if (!subscriptionList) return;
   
-  // 기존 목록 비우기
   subscriptionList.innerHTML = "";
 
-  // 구독이 없는 경우 메시지 표시
   if (subscriptions.length === 0) {
     subscriptionList.innerHTML = '<div class="p-3 text-gray-500 text-center">No subscriptions yet</div>';
     return;
   }
 
-  // 각 구독 항목 추가
   subscriptions.forEach((subscription) => {
     const listItem = document.createElement("div");
     listItem.className = "subscription-item p-3 border-b";
     
-    // 채널 또는 플레이리스트 아이콘
-    const iconType = subscription.isChannel ? 'user' : 'list';
-    
+    // DB에서 가져온 제목 사용 (user_title 우선, 없으면 youtube_title)
+    const displayTitle = subscription.user_title || subscription.youtube_title || "Untitled Playlist";
+    // 폴더 이름도 user_title 기준으로 설정 (없으면 youtube_title, 그것도 없으면 "Default")
+    const folderDisplayName = subscription.user_title || subscription.youtube_title || "Default";
+    // 마지막 확인 시간 포맷팅
+    const lastCheckFormatted = subscription.last_checked
+      ? new Date(subscription.last_checked).toLocaleString()
+      : 'Never checked';
+    // 채널 아이콘 결정 (url 기반으로 간단히)
+    const isChannel = subscription.url.includes('/channel/') || subscription.url.includes('/c/') || subscription.url.includes('/user/') || subscription.url.includes('@');
+    const iconType = isChannel ? 'user' : 'list';
+
     listItem.innerHTML = `
       <div class="flex items-center">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
-          <path fill-rule="evenodd" d="${iconType === 'user' 
-            ? 'M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z'
-            : 'M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z'}" 
-            clip-rule="evenodd" />
+          <path fill-rule="evenodd" d="${
+            iconType === 'user'
+              ? 'M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z'
+              : 'M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z'
+          }" clip-rule="evenodd" />
         </svg>
-        <div class="font-semibold">${
-          subscription.title || "Untitled Playlist"
-        }</div>
+        <div class="font-semibold">${displayTitle}</div>
       </div>
       <div class="text-sm text-gray-500 mt-1">
         URL: ${subscription.url}
       </div>
       <div class="text-sm text-gray-500">
-        Folder: ${
-          subscription.folderName || "Default"
-        } | Format: ${subscription.format} ${
-          subscription.quality || ""
-        }
+        Folder: ${folderDisplayName} | Format: ${subscription.format || 'best'} ${subscription.quality || ''}
       </div>
       <div class="text-sm text-gray-500">
-        Last Check: ${subscription.lastCheck ? 
-          new Date(subscription.lastCheck).toLocaleString() : 
-          'Never checked'}
+        Videos: ${subscription.videos ?? 'N/A'} / ${subscription.videos_from_yt ?? 'N/A'}
       </div>
-      <button class="delete-sub bg-red-100 text-red-700 px-2 py-1 rounded mt-2" 
-        data-url="${subscription.url}">Delete</button>
+      <div class="text-sm text-gray-500">
+        Last Check: ${lastCheckFormatted}
+      </div>
+      <button class="delete-sub bg-red-100 text-red-700 px-2 py-1 rounded mt-2 text-sm"
+              data-url="${subscription.url}">Delete</button>
     `;
     subscriptionList.appendChild(listItem);
   });
-  
-  // 삭제 버튼에 이벤트 리스너 추가
+
   document.querySelectorAll('.delete-sub').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const url = e.target.getAttribute('data-url');
-      if (window.removeSubscription && url) {
-        window.removeSubscription(url);
-      }
-    });
+    btn.removeEventListener('click', handleDeleteSubscription); // 기존 리스너 제거
+    btn.addEventListener('click', handleDeleteSubscription); // 새 리스너 추가
   });
+}
+
+// 삭제 버튼 클릭 핸들러 (함수로 분리)
+function handleDeleteSubscription(e) {
+  const url = e.target.getAttribute('data-url');
+  if (window.removeSubscription && url) {
+    if (confirm(`Are you sure you want to remove the subscription for ${url}?`)) {
+        window.removeSubscription(url);
+    }
+  }
 }
 
 /**
