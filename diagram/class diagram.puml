@@ -6,32 +6,62 @@ skinparam class {
     BorderColor Black
 }
 
-title Eagle IVD - 핵심 모듈 및 객체 관계도
+title Eagle IVD - 시스템 구조도
 
 package "Core Modules" {
     class "main.js" as Main {
         + onPluginCreate()
+        + onPluginRun()
         + initializeUI()
         + registerEventHandlers()
         - setupMaintenanceHandlers()
+        - loadModules()
     }
 
     class "subscription-manager.js" as SubManager {
         - pluginPath: string
         - subscriptions: Array
         - isChecking: boolean
+        - downloadManager: DownloadManager
+        - checker: SubscriptionChecker
+        - importer: SubscriptionImporter
+        - prefixUploadDate: boolean
+        + initialize()
         + addSubscription()
         + removeSubscription()
         + checkAllSubscriptions()
+        + startAutoCheck()
+        + stopAutoCheck()
+        + getChannelId()
+        + addChannelSubscription()
+    }
+
+    class "subscription-checker.js" as SubChecker {
+        - downloadManager: DownloadManager
+        - updateUI: Function
+        - importer: SubscriptionImporter
+        + checkAllSubscriptions()
+        + checkSubscription()
         - processInBatches()
-        - checkSubscription()
         - importAndRemoveDownloadedFiles()
+    }
+
+    class "subscription-importer.js" as SubImporter {
+        - updateUI: Function
+        - prefixUploadDate: boolean
+        + importAndRemoveDownloadedFiles()
+        - createFolder()
+        - importToEagle()
     }
 
     class "download-manager.js" as DLManager {
         - ytdlpPath: string
+        - downloadFolder: string
+        + initialize()
         + getMetadata()
-        + downloadVideo()
+        + getPlaylistMetadata()
+        + startDownload()
+        + cancel()
         - executeYtDlp()
         - parseOutput()
     }
@@ -39,10 +69,11 @@ package "Core Modules" {
     class "library-maintenance.js" as LibMaint {
         - pluginPath: string
         - isRunning: boolean
-        - stats: object
+        - stats: MaintenanceStats
         + checkDuplicates()
         + checkConsistency()
         + fixInconsistencies()
+        + removeInconsistenciesFromDB()
         - resolveDuplicate()
         - mergeMetadata()
     }
@@ -50,9 +81,13 @@ package "Core Modules" {
     class "ui-controller.js" as UIController {
         + updateMaintenanceUI()
         + updateStatusUI()
+        + updateProgressUI()
         + showError()
         + appendLog()
         + showConfirmDialog()
+        + updateSubscriptionListUI()
+        + showTab()
+        + showReportDialog()
     }
 
     class "eagle-api.js" as EagleAPI {
@@ -65,8 +100,33 @@ package "Core Modules" {
     }
 }
 
+package "Database" {
+    class "subscription-db.js" as SubDB {
+        - db: SQLite.Database
+        + initDatabase()
+        + getAllPlaylists()
+        + getPlaylistByUrl()
+        + addPlaylist()
+        + updatePlaylist()
+        + deletePlaylist()
+        + getVideosByPlaylist()
+        + addVideo()
+        + updateVideo()
+        + getAllVideoIds()
+        + deleteVideoByVideoId()
+        + getVideosByVideoId()
+        + markVideoAsEagleLinked()
+    }
+
+    class "SQLite Database" as SQLiteDB {
+        + playlists
+        + videos
+    }
+}
+
 package "Data Objects" {
     class Subscription {
+        + id: number
         + url: string
         + folderName: string
         + format: string
@@ -74,6 +134,20 @@ package "Data Objects" {
         + videoIds: Array
         + title: string
         + lastCheck: number
+        + autoDownload: boolean
+        + skip: boolean
+    }
+
+    class Video {
+        + id: number
+        + playlist_id: number
+        + video_id: string
+        + title: string
+        + status: string
+        + downloaded: boolean
+        + auto_download: boolean
+        + skip: boolean
+        + eagle_linked: boolean
     }
 
     class MaintenanceStats {
@@ -111,29 +185,53 @@ package "External Services" {
     }
 }
 
+package "User Interface" {
+    class "index.html" as UI {
+        + singleTab
+        + playlistTab
+        + subscriptionTab
+        + maintenanceTab
+        + settingsTab
+    }
+}
+
 ' 의존성 관계
 Main --> SubManager: creates & manages
 Main --> LibMaint: creates & manages
 Main --> UIController: creates & manages
+Main --> DLManager: creates & manages
 
 SubManager --> DLManager: uses
+SubManager --> SubChecker: uses
+SubManager --> SubImporter: uses
+SubManager --> SubDB: uses
 SubManager --> EagleAPI: uses
 SubManager --> Subscription: manages
-SubManager ..> YtDlp: uses via DLManager
+
+SubChecker --> DLManager: uses
+SubChecker --> SubImporter: uses
+
+SubImporter --> EagleAPI: uses
 
 DLManager ..> YtDlp: executes
 LibMaint --> EagleAPI: uses
+LibMaint --> SubDB: uses
 LibMaint --> MaintenanceStats: manages
 
 EagleAPI ..> Eagle: interfaces with
-EagleAPI --> ItemAPI: implements
-EagleAPI --> FolderAPI: implements
 
+SubDB --> SQLiteDB: manages
+SQLiteDB --> Subscription: stores
+SQLiteDB --> Video: stores
+
+UI --> Main: interacts
+UIController --> UI: updates
 UIController --> SubManager: triggers actions
 UIController --> LibMaint: triggers maintenance
 
 ' 이벤트 흐름
 SubManager ..> UIController: emits events
 LibMaint ..> UIController: emits events
+DLManager ..> UIController: emits progress
 
 @enduml
