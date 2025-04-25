@@ -62,8 +62,10 @@ function updateSubscriptionListUI(subscriptions) {
     const lastCheckFormatted = subscription.last_checked
       ? new Date(subscription.last_checked).toLocaleString()
       : 'Never checked';
-    // 채널 아이콘 결정 (url 기반으로 간단히)
-    const isChannel = subscription.url.includes('/channel/') || subscription.url.includes('/c/') || subscription.url.includes('/user/') || subscription.url.includes('@');
+    // 채널 아이콘 결정 (url 기반으로 간단히) + ID 저장
+    const playlistId = subscription.id; // DB의 id 값
+    const playlistUrl = subscription.url;
+    const isChannel = playlistUrl.includes('/channel/') || playlistUrl.includes('/c/') || playlistUrl.includes('/user/') || playlistUrl.includes('@');
     const iconType = isChannel ? 'user' : 'list';
 
     listItem.innerHTML = `
@@ -90,7 +92,9 @@ function updateSubscriptionListUI(subscriptions) {
         Last Check: ${lastCheckFormatted}
       </div>
       <button class="delete-sub bg-red-100 text-red-700 px-2 py-1 rounded mt-2 text-sm"
-              data-url="${subscription.url}">Delete</button>
+              data-id="${playlistId}"
+              data-url="${playlistUrl}"
+              data-title="${displayTitle}">Delete</button>
     `;
     subscriptionList.appendChild(listItem);
   });
@@ -103,11 +107,20 @@ function updateSubscriptionListUI(subscriptions) {
 
 // 삭제 버튼 클릭 핸들러 (함수로 분리)
 function handleDeleteSubscription(e) {
-  const url = e.target.getAttribute('data-url');
-  if (window.removeSubscription && url) {
-    if (confirm(`Are you sure you want to remove the subscription for ${url}?`)) {
-        window.removeSubscription(url);
-    }
+  const button = e.target;
+  const playlistId = button.getAttribute('data-id');
+  const playlistUrl = button.getAttribute('data-url');
+  const playlistTitle = button.getAttribute('data-title');
+
+  // playlistId를 숫자로 변환 시도
+  const idNum = parseInt(playlistId, 10);
+
+  if (window.removeSubscription && !isNaN(idNum) && playlistUrl) {
+    // 확인 로직은 main.js의 removeSubscription 함수 내부로 이동했으므로 여기서는 바로 호출
+    window.removeSubscription(idNum, playlistUrl, playlistTitle);
+  } else {
+    console.error("Could not remove subscription: Missing data", { playlistId, playlistUrl, playlistTitle });
+    alert("Failed to get subscription details for removal.");
   }
 }
 

@@ -21,8 +21,7 @@ class SubscriptionManager extends EventEmitter {
    */
   constructor(pluginPath) {
     super();
-    // SQLite DB 초기화
-    (async () => await subscriptionDb.initDatabase(pluginPath))();
+    this.pluginPath = pluginPath; // pluginPath 저장
     this.subscriptions = [];
     this.isChecking = false;
     this.downloadManager = null;
@@ -39,6 +38,16 @@ class SubscriptionManager extends EventEmitter {
   }
 
   /**
+   * 데이터베이스 초기화 및 초기 구독 로드를 수행합니다.
+   * @returns {Promise<void>}
+   */
+  async initialize() {
+    await subscriptionDb.initDatabase(this.pluginPath);
+    await this.loadSubscriptions();
+    console.log("Subscription Manager initialized and subscriptions loaded.");
+  }
+
+  /**
    * 다운로드 관리자 설정
    * @param {object} downloadManager - 다운로드 관리자 인스턴스
    */
@@ -52,6 +61,10 @@ class SubscriptionManager extends EventEmitter {
    * @returns {Promise<Array>} 구독 목록
    */
   async loadSubscriptions() {
+    // DB가 초기화되었는지 확인 (선택적 안전 장치)
+    if (!subscriptionDb) {
+      throw new Error("Database is not initialized yet.");
+    }
     // DB에서 모든 플레이리스트 조회
     this.subscriptions = await subscriptionDb.getAllPlaylists();
     return this.subscriptions;
@@ -176,19 +189,18 @@ class SubscriptionManager extends EventEmitter {
 
   /**
    * 구독 제거
-   * @param {string} url - 구독 URL
+   * @param {number} id - 구독 ID
+   * @param {boolean} deleteVideos - 관련 영상도 함께 삭제할지 여부
    * @returns {Promise<void>}
    */
-  async removeSubscription(url) {
-    const subscription = this.subscriptions.find(s => s.url === url);
-    if (subscription) {
-      // DB에서도 삭제
-      await subscriptionDb.deletePlaylist(subscription.id);
-      this.subscriptions = this.subscriptions.filter(s => s.url !== url);
-      console.log("Unsubscribed from playlist:", url);
-      this.emit('subscriptionRemoved', subscription);
-    } else {
-      console.log("Subscription not found:", url);
+  async removeSubscription(id, deleteVideos = false) {
+    try {
+      await subscriptionDb.deletePlaylist(id, deleteVideos);
+      this.subscriptions = this.subscriptions.filter(sub => sub.id !== id);
+      this.emit('subscription-removed', id);
+    } catch (error) {
+      console.error('Error removing subscription:', error);
+      throw error;
     }
   }
 

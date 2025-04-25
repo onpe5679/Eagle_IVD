@@ -73,7 +73,7 @@ eagle.onPluginCreate(async (plugin) => {
 
   try {
     await downloadManager.initialize();
-    await subscriptionManager.loadSubscriptions();
+    await subscriptionManager.initialize();
   } catch (error) {
     console.error("Failed to initialize managers:", error);
     uiController.showError(`Initialization failed: ${error.message}`);
@@ -232,12 +232,31 @@ eagle.onPluginCreate(async (plugin) => {
   };
 
   // 구독 삭제 함수
-  window.removeSubscription = async (url) => {
+  window.removeSubscription = async (playlistId, playlistUrl, playlistTitle) => {
     try {
-      await subscriptionManager.removeSubscription(url);
+      // 사용자 확인 (Electron dialog 사용)
+      const result = await window.eagle.dialog.showMessageBox({
+        type: 'question',
+        buttons: ['플레이리스트만 삭제', '영상 기록도 함께 삭제', '취소'],
+        defaultId: 0, // 기본값: 플레이리스트만 삭제
+        title: '구독 삭제 확인',
+        message: `'${playlistTitle || playlistUrl}' 구독을 삭제하시겠습니까?`,
+        detail: '이 플레이리스트에 속한 영상 기록들을 DB에서 함께 삭제할지 선택해주세요.'
+      });
+
+      const response = result.response;
+
+      if (response === 2) { // 취소
+        uiController.updateStatusUI("구독 삭제 취소됨");
+        return;
+      }
+
+      const deleteVideos = (response === 1); // '영상 기록도 함께 삭제' 선택 시 true
+
+      await subscriptionManager.removeSubscription(playlistId, deleteVideos);
       const subscriptions = await subscriptionManager.loadSubscriptions();
       uiController.updateSubscriptionListUI(subscriptions);
-      uiController.updateStatusUI(`Subscription removed for: ${url}`);
+      uiController.updateStatusUI(`구독 삭제 완료: ${playlistTitle || playlistUrl} (영상 함께 삭제: ${deleteVideos})`);
     } catch (error) {
       console.error("Failed to remove subscription:", error);
       uiController.showError(error.message);
@@ -248,7 +267,7 @@ eagle.onPluginCreate(async (plugin) => {
   window.loadSubscriptions = async () => {
     const subscriptions = await subscriptionManager.loadSubscriptions();
     uiController.updateSubscriptionListUI(subscriptions);
-    return subscriptions;
+    return subscriptionManager.subscriptions;
   };
 
   // 구독 확인 기능
@@ -694,7 +713,7 @@ eagle.onPluginCreate(async (plugin) => {
     window.loadSubscriptions().then(subscriptions => {
       console.log(`Loaded ${subscriptions.length} subscriptions`);
     }).catch(error => {
-      console.error("Failed to load subscriptions:", error);
+      console.error("Failed to load subscriptions in initializeUI:", error);
       uiController.showError("Failed to load subscriptions");
     });
     
@@ -848,8 +867,22 @@ eagle.onPluginRun(() => {
       window.loadSubscriptions().then(subscriptions => {
         console.log(`Loaded ${subscriptions.length} subscriptions`);
       }).catch(error => {
-        console.error("Failed to load subscriptions:", error);
+        console.error("Failed to load subscriptions onPluginRun:", error);
       });
     }
   }, 500); // 충분한 로딩 시간 후 초기화
-}); 
+});
+
+/**
+ * 구독 삭제
+ * @param {number} id - 구독 ID
+ * @param {boolean} deleteVideos - 관련 영상도 함께 삭제할지 여부
+ */
+async function removeSubscription(id, deleteVideos = false) {
+  try {
+    await subscriptionManager.removeSubscription(id, deleteVideos);
+    await loadSubscriptions();
+  } catch (error) {
+    console.error('Error removing subscription:', error);
+  }
+} 

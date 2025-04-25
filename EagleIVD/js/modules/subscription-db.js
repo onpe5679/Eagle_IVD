@@ -35,7 +35,7 @@ async function initDatabase(pluginPath) {
     CREATE TABLE IF NOT EXISTS videos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       playlist_id INTEGER,
-      video_id TEXT UNIQUE,
+      video_id TEXT,
       title TEXT,
       status TEXT,
       downloaded INTEGER DEFAULT 0,
@@ -45,9 +45,17 @@ async function initDatabase(pluginPath) {
       failed_reason TEXT,
       first_attempt DATETIME,
       downloaded_at DATETIME,
-      FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+      is_duplicate INTEGER DEFAULT 0,
+      duplicate_check_date DATETIME,
+      master_video_id TEXT,
+      source_playlist_url TEXT,
+      UNIQUE(playlist_id, video_id)
     );
   `);
+
+  // 참고: 기존 DB 스키마에 문제가 있다면 (예: video_id에 UNIQUE 제약 조건이 남아있는 경우),
+  // DB 파일을 삭제하거나 수동으로 수정해야 할 수 있습니다.
+  // ALTER TABLE로는 SQLite에서 제약 조건 수정이 제한적입니다.
 }
 
 /**
@@ -93,10 +101,43 @@ async function updatePlaylist(id, fields) {
 }
 
 /**
- * 플레이리스트 삭제
+ * 재생목록 삭제
+ * @param {number} id - 재생목록 ID
+ * @param {boolean} deleteVideos - 관련 영상도 함께 삭제할지 여부
  */
-async function deletePlaylist(id) {
-  await db.run('DELETE FROM playlists WHERE id = ?', id);
+async function deletePlaylist(id, deleteVideos = false) {
+  try {
+    if (deleteVideos) {
+      // 재생목록에 속한 모든 영상 ID 가져오기
+      const videoIds = await db.all(
+        'SELECT video_id FROM videos WHERE playlist_id = ?',
+        [id]
+      );
+      
+      // 영상 삭제
+      for (const { video_id } of videoIds) {
+        await db.run(
+          'DELETE FROM videos WHERE id = ?',
+          [video_id]
+        );
+      }
+    }
+
+    // 재생목록-영상 관계 삭제
+    await db.run(
+      'DELETE FROM videos WHERE playlist_id = ?',
+      [id]
+    );
+
+    // 재생목록 삭제
+    await db.run(
+      'DELETE FROM playlists WHERE id = ?',
+      [id]
+    );
+  } catch (error) {
+    console.error('Error deleting playlist:', error);
+    throw error;
+  }
 }
 
 /**
@@ -113,15 +154,21 @@ async function getVideosByPlaylist(playlistId) {
  * 비디오 레코드 추가
  */
 async function addVideo(v) {
+  // UNIQUE(playlist_id, video_id) 제약 조건에 따라 중복 시 무시됨
   const stmt = await db.run(
-    `INSERT OR IGNORE INTO videos (playlist_id, video_id, title, status, downloaded, auto_download, skip, eagle_linked, failed_reason, first_attempt, downloaded_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO videos (
+      playlist_id, video_id, title, status, downloaded, auto_download,
+      skip, eagle_linked, failed_reason, first_attempt, downloaded_at,
+      is_duplicate, duplicate_check_date, master_video_id, source_playlist_url
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     v.playlist_id, v.video_id, v.title, v.status,
     v.downloaded ? 1 : 0, v.auto_download ? 1 : 0, v.skip ? 1 : 0,
     v.eagle_linked ? 1 : 0, v.failed_reason || null,
-    v.first_attempt || null, v.downloaded_at || null
+    v.first_attempt || null, v.downloaded_at || null,
+    v.is_duplicate ? 1 : 0, v.duplicate_check_date || null,
+    v.master_video_id || null, v.source_playlist_url || null
   );
-  return stmt.lastID;
+  return stmt.lastID; // INSERT 성공 시 lastID 반환, IGNORE 시 0 또는 undefined 반환
 }
 
 /**
@@ -151,6 +198,23 @@ async function deleteVideoByVideoId(videoId) {
   await db.run('DELETE FROM videos WHERE video_id = ?', videoId);
 }
 
+/**
+ * video_id로 모든 관련 비디오 레코드 조회
+ * @param {string} videoId 
+ * @returns {Promise<Array>}
+ */
+async function getVideosByVideoId(videoId) {
+  return await db.all('SELECT * FROM videos WHERE video_id = ?', videoId);
+}
+
+/**
+ * video_id를 사용하여 영상의 eagle_linked 상태를 1로 업데이트합니다.
+ * @param {string} videoId
+ */
+async function markVideoAsEagleLinked(videoId) {
+  await db.run('UPDATE videos SET eagle_linked = 1 WHERE video_id = ?', videoId);
+}
+
 module.exports = {
   initDatabase,
   getAllPlaylists,
@@ -162,5 +226,7 @@ module.exports = {
   addVideo,
   updateVideo,
   getAllVideoIds,
-  deleteVideoByVideoId
+  deleteVideoByVideoId,
+  getVideosByVideoId,
+  markVideoAsEagleLinked
 }; 

@@ -27,8 +27,9 @@ async function getFFmpegPath() {
  * @returns {string|null} 비디오 ID
  */
 function getYoutubeVideoId(url) {
+  // 더 범용적인 정규식으로 교체 (언더바 포함 및 길이 유연성)
   const videoIdRegex =
-    /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/;
+    /(?:v=|v\/|embed\/|watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11,})/; // 11자리 이상 허용
   const match = url.match(videoIdRegex);
   return match ? match[1] : null;
 }

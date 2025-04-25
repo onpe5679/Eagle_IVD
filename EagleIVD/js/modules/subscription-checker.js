@@ -242,10 +242,12 @@ class SubscriptionChecker {
             const output = data.toString();
             this.updateStatusUI(output, true);
             if (output.includes('Destination:')) {
-              const m = output.match(/Destination: .+[\/\\]([^_]+)_/);
+              // 단순히 11자 ID만 추출 (중복 체크 없음 - 별도 library-maintenance에서 처리)
+              const m = output.match(/Destination: .*[\\\/]([A-Za-z0-9_-]{11})_/);
               if (m && m[1]) {
                 successIds.push(m[1]);
                 stats.downloadedVideos++;
+                console.log(`ID 추출: ${m[1]}`);
               }
             }
           });
@@ -278,6 +280,7 @@ class SubscriptionChecker {
           auto_download: sub.autoDownload || false,
           skip: false,
           eagle_linked: false,
+          source_playlist_url: sub.url,
           first_attempt: new Date().toISOString(),
           downloaded_at: new Date().toISOString()
         };
@@ -302,6 +305,7 @@ class SubscriptionChecker {
           auto_download: sub.autoDownload || false,
           skip: true,  // 실패한 영상은 자동으로 스킵 처리
           eagle_linked: false,
+          source_playlist_url: sub.url,
           failed_reason: '다운로드 실패',
           first_attempt: new Date().toISOString()
         };

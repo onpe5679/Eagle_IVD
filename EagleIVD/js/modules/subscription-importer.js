@@ -1,6 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const EventEmitter = require('events');
+  const subscriptionDb = require('./subscription-db'); // DB 모듈 추가
 
 /**
  * 다운로드된 파일을 Eagle에 추가하고 정리하는 로직
@@ -88,7 +89,7 @@ class SubscriptionImporter extends EventEmitter {
 
       // 파일 추가 및 삭제
       for (const file of files) {
-        if (file.endsWith(".txt") || file.endsWith(".part")) {
+        if (file.endsWith(".part") || file.endsWith(".ytdl") || file.endsWith(".txt")) {
           console.log("Skipping non-video file:", file);
           continue;
         }
@@ -102,13 +103,19 @@ class SubscriptionImporter extends EventEmitter {
             if (file.startsWith(`${id}_`)) {
               videoId = id;
               currentMeta = videoMetadata[id];
+              console.log(`Extracted videoId ${videoId} from filename`);
               break;
             }
           }
           if (!videoId) {
             const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
             videoId = m ? m[1] : null;
-            if (videoMetadata[videoId]) currentMeta = videoMetadata[videoId];
+            if (videoId && videoMetadata[videoId]) currentMeta = videoMetadata[videoId];
+            console.log(`Extracted videoId ${videoId} from URL`);
+          }
+          if (!videoId) {
+            console.warn(`Could not determine videoId for file: ${file}, skipping DB update.`);
+            continue; // videoId 없으면 DB 업데이트 불가
           }
           let title = path.basename(file, path.extname(file));
           if (title.startsWith(`${videoId}_`)) {
@@ -133,6 +140,13 @@ class SubscriptionImporter extends EventEmitter {
             const item = await withTimeout(eagle.item.addFromPath(filePath, fileMeta));
             console.log(`Added ${file} to Eagle`, item);
             this.emit('videoAdded', { file, metadata: fileMeta });
+            // Eagle 추가 성공 시 DB 업데이트
+            try {
+              await subscriptionDb.markVideoAsEagleLinked(videoId);
+              console.log(`[DB Update] Marked video ${videoId} as eagle_linked.`);
+            } catch (dbError) {
+              console.error(`[DB Update] Failed to mark video ${videoId} as eagle_linked:`, dbError);
+            }
           } catch (addErr) {
             if (addErr.message === 'Import timeout') {
               console.error(`Import timeout for ${file}, skipping file.`);
@@ -145,6 +159,13 @@ class SubscriptionImporter extends EventEmitter {
                   const existing = items[0];
                   const newFolders = new Set([...(existing.folders||[]), playlistFolderId]);
                   await withTimeout(eagle.item.modify(existing.id, { folders: [...newFolders] }));
+                  // 중복 항목 처리 시에도 DB 업데이트
+                  try {
+                    await subscriptionDb.markVideoAsEagleLinked(videoId);
+                    console.log(`[DB Update] Marked existing video ${videoId} as eagle_linked.`);
+                  } catch (dbError) {
+                    console.error(`[DB Update] Failed to mark existing video ${videoId} as eagle_linked:`, dbError);
+                  }
                 }
               } catch (dupErr) {
                 console.error(`Error updating duplicate for ${file}:`, dupErr);
