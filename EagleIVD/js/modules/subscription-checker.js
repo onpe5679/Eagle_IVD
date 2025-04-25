@@ -221,10 +221,12 @@ class SubscriptionChecker {
       this.updateStatusUI(`${sub.title || sub.url}: ${newVideoIds.length}개 영상 다운로드 시작`);
       const playlistId = this.getPlaylistId(sub.url);
       const tempFolder = path.join(this.downloadManager.downloadFolder, `subscription_${playlistId}`);
+      console.log(`[Download] 재생목록 "${sub.title}" 다운로드 시작 (URL: ${sub.url})`);
       await fs.mkdir(tempFolder, { recursive: true });
       const successIds = [];
       for (let i = 0; i < newVideoIds.length; i += downloadBatchSize) {
         const batch = newVideoIds.slice(i, i + downloadBatchSize);
+        console.log(`[Batch] 재생목록 "${sub.title}" - ${i+1}~${Math.min(i+downloadBatchSize, newVideoIds.length)}/${newVideoIds.length} 처리 중`);
         const args = [
           '--ffmpeg-location', this.downloadManager.ffmpegPath,
           '-o', `${tempFolder}/%(id)s_%(title)s.%(ext)s`,
@@ -248,14 +250,14 @@ class SubscriptionChecker {
               if (m && m[1]) {
                 successIds.push(m[1]);
                 stats.downloadedVideos++;
-                console.log(`ID 추출: ${m[1]}`);
+                console.log(`[Success] 재생목록 "${sub.title}" - 영상 다운로드 성공 (ID: ${m[1]})`);
               }
             }
           });
           proc.stderr.on('data', data => {
             const msg = data.toString();
             // 디버그용 전체 stderr 출력
-            console.error('download stderr:', msg);
+            console.error(`[Error] 재생목록 "${sub.title}" (${sub.url}) - 다운로드 오류:`, msg);
             // 다양한 패턴으로 영상 ID와 오류 메시지 추출
             let errorMatch = msg.match(/ERROR: \[youtube\] ([^:]+): (.+)/)
                         || msg.match(/ERROR: ([^:]+): (.+)/)
@@ -294,7 +296,7 @@ class SubscriptionChecker {
           first_attempt: new Date().toISOString(),
           downloaded_at: new Date().toISOString()
         };
-        console.log(`[DB AddVideo - Success] Adding video: ${videoId} for playlist ${sub.id}`, videoData);
+        console.log(`[DB] 재생목록 "${sub.title}" - 성공한 영상 추가 중: ${metadata.title || videoId} (ID: ${videoId})`);
         try {
           await subscriptionDb.addVideo(videoData);
         } catch (dbError) {
@@ -319,7 +321,7 @@ class SubscriptionChecker {
           failed_reason: failedVideoErrors.get(videoId) || '알 수 없는 오류로 다운로드 실패',
           first_attempt: new Date().toISOString()
         };
-        console.log(`[DB AddVideo - Failed] Adding video: ${videoId} for playlist ${sub.id}`, videoData);
+        console.log(`[DB] 재생목록 "${sub.title}" - 실패한 영상 기록 중: ${metadata.title || videoId} (ID: ${videoId})`);
         try {
           await subscriptionDb.addVideo(videoData);
         } catch (dbError) {
