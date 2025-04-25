@@ -149,6 +149,7 @@ class SubscriptionChecker {
       progressCallback(current, total, `플레이리스트 확인 중: ${sub.title || sub.url}`);
     }
     const stats = { totalVideosFound: 0, newVideosFound: 0, processedVideos: 0, downloadedVideos: 0, skippedVideos: 0, errorVideos: 0 };
+    const failedVideoErrors = new Map();
     try {
       // Phase 1: flat-playlist로 새 영상 ID 수집
       const phase1Args = ['--skip-download','--flat-playlist','--print-json','--no-warnings','--ignore-errors', sub.url];
@@ -255,13 +256,22 @@ class SubscriptionChecker {
             const msg = data.toString();
             // 디버그용 전체 stderr 출력
             console.error('download stderr:', msg);
-            // 다양한 패턴으로 영상 ID 추출 시도
-            let match = msg.match(/ERROR: \[youtube\] ([^:]+):/)
-                      || msg.match(/ERROR: ([^:]+):/)
-                      || msg.match(/WARNING: video download failed: ([^\s]+)/i);
-            if (match && match[1]) {
+            // 다양한 패턴으로 영상 ID와 오류 메시지 추출
+            let errorMatch = msg.match(/ERROR: \[youtube\] ([^:]+): (.+)/)
+                        || msg.match(/ERROR: ([^:]+): (.+)/)
+                        || msg.match(/WARNING: video download failed: ([^\s]+) - (.+)/i);
+            
+            if (errorMatch) {
+              const videoId = errorMatch[1];
+              const errorMessage = errorMatch[2] || msg.trim();
               stats.errorVideos++;
-              this.updateStatusUI(`경고: 영상 다운로드 실패: ${match[1]}`);
+              // 실패한 영상 정보를 저장할 맵에 오류 메시지 추가
+              failedVideoErrors.set(videoId, errorMessage);
+              this.updateStatusUI(`경고: 영상 다운로드 실패 (${videoId}): ${errorMessage}`);
+            } else if (msg.includes('ERROR:') || msg.includes('WARNING:')) {
+              // 패턴 매칭 실패 시 전체 오류 메시지 저장
+              stats.errorVideos++;
+              this.updateStatusUI(`경고: 다운로드 실패 - ${msg.trim()}`);
             }
           });
           proc.on('close', resolve);
@@ -306,7 +316,7 @@ class SubscriptionChecker {
           skip: true,  // 실패한 영상은 자동으로 스킵 처리
           eagle_linked: false,
           source_playlist_url: sub.url,
-          failed_reason: '다운로드 실패',
+          failed_reason: failedVideoErrors.get(videoId) || '알 수 없는 오류로 다운로드 실패',
           first_attempt: new Date().toISOString()
         };
         console.log(`[DB AddVideo - Failed] Adding video: ${videoId} for playlist ${sub.id}`, videoData);
