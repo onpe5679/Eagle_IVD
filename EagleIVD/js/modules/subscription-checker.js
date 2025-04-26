@@ -97,15 +97,16 @@ class SubscriptionChecker {
           const existingIds = new Set(sub.videoIds || []);
           const newCount = fetchedVideoIds.filter(id => !existingIds.has(id)).length;
           subscriptionsWithNewVideoCount.push({ subscription: sub, newVideoCount: newCount });
-          console.log(`재생목록 ${sub.title || sub.url} 에서 ${newCount} 개의 영상 발견`);
+          console.log(`[Check] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" (${sub.url}) - ${newCount}개의 새 영상 발견`);
         } catch (error) {
-          console.error(`재생목록 ${sub.title || sub.url} 확인 중 오류:`, error);
+          console.error(`[Error] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" (${sub.url}) - 확인 중 오류:`, error);
           subscriptionsWithNewVideoCount.push({ subscription: sub, newVideoCount: 0 });
         }
       }
 
       // 2단계: 새 영상 수에 따라 정렬
       subscriptionsWithNewVideoCount.sort((a, b) => a.newVideoCount - b.newVideoCount);
+      console.log(`[Summary] 총 ${subscriptionsWithNewVideoCount.length}개의 재생목록 확인 완료`);
 
       // 3단계: 정렬된 순서대로 처리
       const results = [];
@@ -146,7 +147,7 @@ class SubscriptionChecker {
     }
     const { metadataBatchSize = 30, downloadBatchSize = 5, rateLimit = 0, sourceAddress = '' } = options;
     if (progressCallback) {
-      progressCallback(current, total, `플레이리스트 확인 중: ${sub.title || sub.url}`);
+      progressCallback(current, total, `플레이리스트 확인 중: ${sub.user_title || sub.youtube_title || sub.url}`);
     }
     const stats = { totalVideosFound: 0, newVideosFound: 0, processedVideos: 0, downloadedVideos: 0, skippedVideos: 0, errorVideos: 0 };
     const failedVideoErrors = new Map();
@@ -178,13 +179,14 @@ class SubscriptionChecker {
       // DB에서 현재 재생목록(sub.id)에 속한 영상 ID 목록 조회
       const existingVideosInDb = await subscriptionDb.getVideosByPlaylist(sub.id);
       const existingSet = new Set(existingVideosInDb.map(v => v.video_id));
-      console.log(`[DB Check] Found ${existingSet.size} existing videos in DB for playlist ${sub.id}`);
+      console.log(`[DB] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - DB에서 ${existingSet.size}개의 기존 영상 발견`);
 
       // DB에 없는 새 영상 ID만 필터링
       const newVideoIds = fetchedIds.filter(id => !existingSet.has(id));
       stats.newVideosFound = newVideoIds.length;
-      this.updateStatusUI(`${sub.title || sub.url}: ${stats.newVideosFound}개의 새 영상 발견 (DB 비교)`);
+      this.updateStatusUI(`${sub.user_title || sub.youtube_title || sub.url}: ${stats.newVideosFound}개의 새 영상 발견 (DB 비교)`);
       if (!newVideoIds.length) {
+        console.log(`[Check] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" (${sub.url}) - 새로운 영상 없음`);
         return { subscription: sub, newVideos: 0, skippedVideos: stats.skippedVideos, errorVideos: stats.errorVideos, stats };
       }
 
@@ -196,7 +198,7 @@ class SubscriptionChecker {
       const downloadedMetadata = {};
       for (let i = 0; i < videoUrlBatches.length; i++) {
         const batchUrls = videoUrlBatches[i];
-        this.updateStatusUI(`${sub.title || sub.url}: 메타데이터 가져오는 중 (${i+1}/${videoUrlBatches.length})`);
+        this.updateStatusUI(`${sub.user_title || sub.youtube_title || sub.url}: 메타데이터 가져오는 중 (${i+1}/${videoUrlBatches.length})`);
         const metaArgs = ['--skip-download','--print-json','--no-warnings','--ignore-errors','--newline','--socket-timeout','30','--retries','1','--file-access-retries','1', ...batchUrls];
         if (sourceAddress) { metaArgs.unshift(sourceAddress,'--source-address'); }
         await new Promise(resolve => {
@@ -218,15 +220,15 @@ class SubscriptionChecker {
       }
 
       // Phase 3: 실제 다운로드 처리
-      this.updateStatusUI(`${sub.title || sub.url}: ${newVideoIds.length}개 영상 다운로드 시작`);
+      this.updateStatusUI(`${sub.user_title || sub.youtube_title || sub.url}: ${newVideoIds.length}개 영상 다운로드 시작`);
       const playlistId = this.getPlaylistId(sub.url);
       const tempFolder = path.join(this.downloadManager.downloadFolder, `subscription_${playlistId}`);
-      console.log(`[Download] 재생목록 "${sub.title}" 다운로드 시작 (URL: ${sub.url})`);
+      console.log(`[Download] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" 다운로드 시작 (URL: ${sub.url})`);
       await fs.mkdir(tempFolder, { recursive: true });
       const successIds = [];
       for (let i = 0; i < newVideoIds.length; i += downloadBatchSize) {
         const batch = newVideoIds.slice(i, i + downloadBatchSize);
-        console.log(`[Batch] 재생목록 "${sub.title}" - ${i+1}~${Math.min(i+downloadBatchSize, newVideoIds.length)}/${newVideoIds.length} 처리 중`);
+        console.log(`[Batch] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - ${i+1}~${Math.min(i+downloadBatchSize, newVideoIds.length)}/${newVideoIds.length} 처리 중`);
         const args = [
           '--ffmpeg-location', this.downloadManager.ffmpegPath,
           '-o', `${tempFolder}/%(id)s_%(title)s.%(ext)s`,
@@ -250,14 +252,14 @@ class SubscriptionChecker {
               if (m && m[1]) {
                 successIds.push(m[1]);
                 stats.downloadedVideos++;
-                console.log(`[Success] 재생목록 "${sub.title}" - 영상 다운로드 성공 (ID: ${m[1]})`);
+                console.log(`[Success] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - 영상 다운로드 성공 (ID: ${m[1]})`);
               }
             }
           });
           proc.stderr.on('data', data => {
             const msg = data.toString();
             // 디버그용 전체 stderr 출력
-            console.error(`[Error] 재생목록 "${sub.title}" (${sub.url}) - 다운로드 오류:`, msg);
+            console.error(`[Error] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" (${sub.url}) - 다운로드 오류:`, msg);
             // 다양한 패턴으로 영상 ID와 오류 메시지 추출
             let errorMatch = msg.match(/ERROR: \[youtube\] ([^:]+): (.+)/)
                         || msg.match(/ERROR: ([^:]+): (.+)/)
@@ -296,7 +298,7 @@ class SubscriptionChecker {
           first_attempt: new Date().toISOString(),
           downloaded_at: new Date().toISOString()
         };
-        console.log(`[DB] 재생목록 "${sub.title}" - 성공한 영상 추가 중: ${metadata.title || videoId} (ID: ${videoId})`);
+        console.log(`[DB] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - 성공한 영상 추가 중: ${metadata.title || videoId} (ID: ${videoId})`);
         try {
           await subscriptionDb.addVideo(videoData);
         } catch (dbError) {
@@ -321,7 +323,7 @@ class SubscriptionChecker {
           failed_reason: failedVideoErrors.get(videoId) || '알 수 없는 오류로 다운로드 실패',
           first_attempt: new Date().toISOString()
         };
-        console.log(`[DB] 재생목록 "${sub.title}" - 실패한 영상 기록 중: ${metadata.title || videoId} (ID: ${videoId})`);
+        console.log(`[DB] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - 실패한 영상 기록 중: ${metadata.title || videoId} (ID: ${videoId})`);
         try {
           await subscriptionDb.addVideo(videoData);
         } catch (dbError) {
