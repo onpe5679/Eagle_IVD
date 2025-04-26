@@ -166,6 +166,22 @@ function formatDuration(seconds) {
   return parts.join(' ');
 }
 
+/**
+ * Eagle 라이브러리 정보 가져오기
+ * @returns {Promise<object>} 라이브러리 정보
+ */
+async function getLibraryInfo() {
+  return await eagle.library.info();
+}
+
+/**
+ * Eagle 라이브러리 변경 이벤트 등록
+ * @param {Function} callback - 라이브러리 경로를 받는 콜백
+ */
+function onLibraryChanged(callback) {
+  eagle.onLibraryChanged(callback);
+}
+
 // 모듈 내보내기
 module.exports = {
   addItemToLibrary,
@@ -174,5 +190,7 @@ module.exports = {
   updateItemTags,
   isDuplicateItem,
   prepareItemMetadata,
-  formatDuration
+  formatDuration,
+  getLibraryInfo,
+  onLibraryChanged
 }; 

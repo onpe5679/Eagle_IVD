@@ -26,7 +26,8 @@ async function initDatabase(pluginPath) {
       first_created DATETIME DEFAULT CURRENT_TIMESTAMP,
       last_checked DATETIME,
       auto_download INTEGER DEFAULT 0,
-      skip INTEGER DEFAULT 0
+      skip INTEGER DEFAULT 0,
+      library_id INTEGER
     );
   `);
 
@@ -49,9 +50,28 @@ async function initDatabase(pluginPath) {
       duplicate_check_date DATETIME,
       master_video_id TEXT,
       source_playlist_url TEXT,
+      library_id INTEGER,
       UNIQUE(playlist_id, video_id)
     );
   `);
+
+  // libraries 테이블 생성 및 라이브러리 컬럼 마이그레이션
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS libraries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE,
+      path TEXT,
+      modificationTime DATETIME
+    );
+  `);
+  const playlistCols = await db.all("PRAGMA table_info(playlists);");
+  if (!playlistCols.some(col => col.name === "library_id")) {
+    await db.exec("ALTER TABLE playlists ADD COLUMN library_id INTEGER;");
+  }
+  const videoCols = await db.all("PRAGMA table_info(videos);");
+  if (!videoCols.some(col => col.name === "library_id")) {
+    await db.exec("ALTER TABLE videos ADD COLUMN library_id INTEGER;");
+  }
 
   // 참고: 기존 DB 스키마에 문제가 있다면 (예: video_id에 UNIQUE 제약 조건이 남아있는 경우),
   // DB 파일을 삭제하거나 수동으로 수정해야 할 수 있습니다.
@@ -79,10 +99,10 @@ async function getPlaylistByUrl(url) {
  */
 async function addPlaylist(p) {
   const stmt = await db.run(
-    `INSERT INTO playlists (user_title, youtube_title, videos_from_yt, videos, url, format, quality, auto_download, skip)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO playlists (user_title, youtube_title, videos_from_yt, videos, url, format, quality, auto_download, skip, library_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     p.user_title, p.youtube_title, p.videos_from_yt, p.videos, p.url,
-    p.format, p.quality, p.auto_download ? 1 : 0, p.skip ? 1 : 0
+    p.format, p.quality, p.auto_download ? 1 : 0, p.skip ? 1 : 0, p.library_id
   );
   return stmt.lastID;
 }
@@ -159,14 +179,15 @@ async function addVideo(v) {
     `INSERT OR IGNORE INTO videos (
       playlist_id, video_id, title, status, downloaded, auto_download,
       skip, eagle_linked, failed_reason, first_attempt, downloaded_at,
-      is_duplicate, duplicate_check_date, master_video_id, source_playlist_url
+      is_duplicate, duplicate_check_date, master_video_id, source_playlist_url, library_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     v.playlist_id, v.video_id, v.title, v.status,
     v.downloaded ? 1 : 0, v.auto_download ? 1 : 0, v.skip ? 1 : 0,
     v.eagle_linked ? 1 : 0, v.failed_reason || null,
     v.first_attempt || null, v.downloaded_at || null,
     v.is_duplicate ? 1 : 0, v.duplicate_check_date || null,
-    v.master_video_id || null, v.source_playlist_url || null
+    v.master_video_id || null, v.source_playlist_url || null,
+    v.library_id || null
   );
   return stmt.lastID; // INSERT 성공 시 lastID 반환, IGNORE 시 0 또는 undefined 반환
 }
@@ -215,6 +236,41 @@ async function markVideoAsEagleLinked(videoId) {
   await db.run('UPDATE videos SET eagle_linked = 1 WHERE video_id = ?', videoId);
 }
 
+// 라이브러리 추가
+async function addLibrary(lib) {
+  const stmt = await db.run(
+    `INSERT OR IGNORE INTO libraries (name, path, modificationTime) VALUES (?, ?, ?)`,
+    lib.name, lib.path, lib.modificationTime || null
+  );
+  if (stmt.lastID) return stmt.lastID;
+  const row = await db.get(`SELECT id FROM libraries WHERE name = ?`, lib.name);
+  return row.id;
+}
+
+// 라이브러리 조회 (이름 기준)
+async function getLibraryByName(name) {
+  return await db.get(`SELECT * FROM libraries WHERE name = ?`, name);
+}
+
+// 라이브러리 경로 기준 조회
+async function getLibraryByPath(path) {
+  return await db.get(`SELECT * FROM libraries WHERE path = ?`, path);
+}
+
+// 특정 라이브러리의 플레이리스트 조회
+async function getPlaylistsByLibrary(libraryId) {
+  return await db.all(
+    `SELECT * FROM playlists WHERE library_id = ? ORDER BY id`,
+    libraryId
+  );
+}
+
+// 기존 플레이리스트/비디오에 라이브러리 할당 (초기 마이그레이션)
+async function assignItemsToLibrary(libraryId) {
+  await db.run(`UPDATE playlists SET library_id = ? WHERE library_id IS NULL`, libraryId);
+  await db.run(`UPDATE videos SET library_id = ? WHERE library_id IS NULL`, libraryId);
+}
+
 module.exports = {
   initDatabase,
   getAllPlaylists,
@@ -228,5 +284,10 @@ module.exports = {
   getAllVideoIds,
   deleteVideoByVideoId,
   getVideosByVideoId,
-  markVideoAsEagleLinked
+  markVideoAsEagleLinked,
+  addLibrary,
+  getLibraryByName,
+  getLibraryByPath,
+  getPlaylistsByLibrary,
+  assignItemsToLibrary
 }; 

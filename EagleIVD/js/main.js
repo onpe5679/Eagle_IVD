@@ -489,6 +489,33 @@ eagle.onPluginCreate(async (plugin) => {
     }
   };
 
+  // 라이브러리 정보 초기화
+  try {
+    const libInfo = await eagleApi.getLibraryInfo();
+    let lib = await subscriptionDb.getLibraryByName(libInfo.name);
+    if (!lib) {
+      const libId = await subscriptionDb.addLibrary({
+        name: libInfo.name,
+        path: libInfo.path,
+        modificationTime: libInfo.modificationTime
+      });
+      await subscriptionDb.assignItemsToLibrary(libId);
+    }
+  } catch (e) {
+    console.error('Failed to initialize libraries:', e);
+  }
+
+  // 라이브러리 변경 이벤트 처리
+  eagleApi.onLibraryChanged(async (libraryPath) => {
+    console.log('Library changed:', libraryPath);
+    uiController.appendLog(`라이브러리 변경 감지: ${libraryPath}`, false);
+    // 플러그인 재시작 시뮬레이션
+    window.updateUI('라이브러리가 변경되어 플러그인을 재시작합니다...');
+    setTimeout(() => {
+      location.reload();
+    }, 1000);
+  });
+
   // UI 초기화 함수
   function initializeUI() {
     console.log("UI 초기화 시작");
