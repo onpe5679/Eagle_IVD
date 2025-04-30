@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 
@@ -9,7 +10,23 @@ let db;
  * @param {string} pluginPath - 플러그인 경로, DB 파일 위치 결정에 사용
  */
 async function initDatabase(pluginPath) {
-  const dbPath = path.join(pluginPath, 'subscriptions.db');
+  // AppData/Local/EagleIVD 디렉토리 생성
+  const appDataPath = path.join(process.env.LOCALAPPDATA, 'EagleIVD');
+  if (!fs.existsSync(appDataPath)) {
+    fs.mkdirSync(appDataPath, { recursive: true });
+  }
+  
+  const dbPath = path.join(appDataPath, 'ivd.db');
+  // 기존 DB에 library_id 컬럼 누락 시 초기화
+  if (fs.existsSync(dbPath)) {
+    const tempDb = await open({ filename: dbPath, driver: sqlite3.Database });
+    const cols = await tempDb.all('PRAGMA table_info(videos);');
+    await tempDb.close();
+    if (!cols.some(c => c.name === 'library_id')) {
+      // library_id 컬럼 없으면 파일 삭제하여 재생성
+      fs.unlinkSync(dbPath);
+    }
+  }
   db = await open({ filename: dbPath, driver: sqlite3.Database });
 
   // playlists 테이블
@@ -180,7 +197,7 @@ async function addVideo(v) {
       playlist_id, video_id, title, status, downloaded, auto_download,
       skip, eagle_linked, failed_reason, first_attempt, downloaded_at,
       is_duplicate, duplicate_check_date, master_video_id, source_playlist_url, library_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     v.playlist_id, v.video_id, v.title, v.status,
     v.downloaded ? 1 : 0, v.auto_download ? 1 : 0, v.skip ? 1 : 0,
     v.eagle_linked ? 1 : 0, v.failed_reason || null,

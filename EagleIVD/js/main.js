@@ -5,6 +5,8 @@
 
 // Eagle 플러그인 환경에서 사용 가능한 모듈 로딩 방식
 let DownloadManager, EnhancedSubscriptionManager, LibraryMaintenance, eagleApi, utils, uiController;
+const subscriptionDb = require('../js/modules/subscription-db.js');
+console.log("DB모듈 로드 성공");
 
 // 필요한 모듈 동적 로딩
 function loadModules() {
@@ -61,10 +63,33 @@ eagle.onPluginCreate(async (plugin) => {
     return;
   }
 
+  // 0. DB 먼저 초기화
+  await subscriptionDb.initDatabase(plugin.path);
+
+  // 1. 라이브러리 정보 DB에 먼저 추가
+  let libId;
+  try {
+    const libInfo = await eagleApi.getLibraryInfo();
+    let lib = await subscriptionDb.getLibraryByName(libInfo.name);
+    if (!lib) {
+      libId = await subscriptionDb.addLibrary({
+        name: libInfo.name,
+        path: libInfo.path,
+        modificationTime: libInfo.modificationTime
+      });
+      await subscriptionDb.assignItemsToLibrary(libId);
+    } else {
+      libId = lib.id;
+    }
+  } catch (e) {
+    console.error('Failed to initialize libraries:', e);
+    libId = null;
+  }
+
   // 다운로드 관리자 초기화
   const downloadManager = new DownloadManager(plugin.path);
-  // 구독 관리자 초기화
-  const subscriptionManager = new EnhancedSubscriptionManager(plugin.path);
+  // 구독 관리자 초기화 (libraryId 전달)
+  const subscriptionManager = new EnhancedSubscriptionManager(plugin.path, libId);
   // 라이브러리 유지 관리 초기화
   const libraryMaintenance = new LibraryMaintenance(plugin.path);
   
@@ -488,22 +513,6 @@ eagle.onPluginCreate(async (plugin) => {
       uiController.showError(`보고서 보기 실패: ${error.message}`);
     }
   };
-
-  // 라이브러리 정보 초기화
-  try {
-    const libInfo = await eagleApi.getLibraryInfo();
-    let lib = await subscriptionDb.getLibraryByName(libInfo.name);
-    if (!lib) {
-      const libId = await subscriptionDb.addLibrary({
-        name: libInfo.name,
-        path: libInfo.path,
-        modificationTime: libInfo.modificationTime
-      });
-      await subscriptionDb.assignItemsToLibrary(libId);
-    }
-  } catch (e) {
-    console.error('Failed to initialize libraries:', e);
-  }
 
   // 라이브러리 변경 이벤트 처리
   eagleApi.onLibraryChanged(async (libraryPath) => {

@@ -18,10 +18,12 @@ class SubscriptionManager extends EventEmitter {
   /**
    * 구독 관리자 초기화
    * @param {string} pluginPath - 플러그인 경로
+   * @param {number} libraryId - 라이브러리 ID
    */
-  constructor(pluginPath) {
+  constructor(pluginPath, libraryId) {
     super();
-    this.pluginPath = pluginPath; // pluginPath 저장
+    this.pluginPath = pluginPath;
+    this.libraryId = libraryId;
     this.subscriptions = [];
     this.isChecking = false;
     this.downloadManager = null;
@@ -53,7 +55,7 @@ class SubscriptionManager extends EventEmitter {
    */
   setDownloadManager(downloadManager) {
     this.downloadManager = downloadManager;
-    this.checker = new SubscriptionChecker(downloadManager, this.updateStatusUI.bind(this), this.importer);
+    this.checker = new SubscriptionChecker(downloadManager, this.updateStatusUI.bind(this), this.importer, this.libraryId);
   }
 
   /**
@@ -178,9 +180,11 @@ class SubscriptionManager extends EventEmitter {
       format: newSub.format,
       quality: newSub.quality,
       auto_download: newSub.autoDownload,
-      skip: newSub.skip
+      skip: newSub.skip,
+      library_id: this.libraryId
     });
     newSub.id = id;
+    newSub.library_id = this.libraryId;
     this.subscriptions.push(newSub);
 
     console.log(`Subscribed to playlist: ${newSub.title} (${url})`);
@@ -348,10 +352,11 @@ class EnhancedSubscriptionManager extends SubscriptionManager {
   /**
    * 향상된 구독 관리자 초기화
    * @param {string} pluginPath - 플러그인 경로
+   * @param {number} libraryId - 라이브러리 ID
    */
-  constructor(pluginPath) {
-    super(pluginPath);
-    this.checkInterval = null; // 주기적 확인 인터벌
+  constructor(pluginPath, libraryId) {
+    super(pluginPath, libraryId);
+    this.checkInterval = null;
   }
   
   /**

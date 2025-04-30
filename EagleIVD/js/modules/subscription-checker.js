@@ -11,11 +11,13 @@ class SubscriptionChecker {
    * @param {object} downloadManager - yt-dlp 호출을 위한 DownloadManager 인스턴스
    * @param {function} updateStatusUI - 상태 메시지 업데이트 콜백
    * @param {object} importer - 다운로드된 파일 임포트 로직 인스턴스
+   * @param {number} libraryId - 현재 라이브러리 ID
    */
-  constructor(downloadManager, updateStatusUI, importer) {
+  constructor(downloadManager, updateStatusUI, importer, libraryId) {
     this.downloadManager = downloadManager;
     this.updateStatusUI = updateStatusUI;
     this.importer = importer;
+    this.libraryId = libraryId;
     this.isChecking = false;
   }
 
@@ -296,7 +298,8 @@ class SubscriptionChecker {
           eagle_linked: false,
           source_playlist_url: sub.url,
           first_attempt: new Date().toISOString(),
-          downloaded_at: new Date().toISOString()
+          downloaded_at: new Date().toISOString(),
+          library_id: this.libraryId
         };
         console.log(`[DB] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - 성공한 영상 추가 중: ${metadata.title || videoId} (ID: ${videoId})`);
         try {
@@ -321,7 +324,8 @@ class SubscriptionChecker {
           eagle_linked: false,
           source_playlist_url: sub.url,
           failed_reason: failedVideoErrors.get(videoId) || '알 수 없는 오류로 다운로드 실패',
-          first_attempt: new Date().toISOString()
+          first_attempt: new Date().toISOString(),
+          library_id: this.libraryId
         };
         console.log(`[DB] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - 실패한 영상 기록 중: ${metadata.title || videoId} (ID: ${videoId})`);
         try {
