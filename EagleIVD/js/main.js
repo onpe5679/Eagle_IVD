@@ -336,20 +336,39 @@ eagle.onPluginCreate(async (plugin) => {
   window.checkAllSubscriptions = async () => {
     // NIC 선택 값 읽기
     const sourceAddress = document.getElementById('sourceAddressSelect').value || '';
+    // 차단 우회 옵션 읽기
+    const randomUa = document.getElementById('randomUaChk')?.checked || false;
+    const cookieFile = document.getElementById('cookieFileInput')?.files[0]?.path || '';
+    const multiNic = document.getElementById('multiNicChk')?.checked || false;
+    // 스레드별 NIC & 쿠키 배열
+    let threadNics = [], threadCookies = [];
+    const concurrency = parseInt(document.getElementById('concurrentPlaylists').value) || 1;
+    if (multiNic) {
+      for (let i = 1; i <= concurrency; i++) {
+        threadNics.push(document.getElementById(`threadNicSel${i}`)?.value || '');
+        threadCookies.push(document.getElementById(`threadCookieInput${i}`)?.files[0]?.path || '');
+      }
+    } else {
+      threadNics = Array(concurrency).fill(sourceAddress);
+      threadCookies = Array(concurrency).fill(cookieFile);
+    }
     console.log('Using sourceAddress:', sourceAddress);
     try {
       // 설정 값 읽기
       const metadataBatchSize = parseInt(document.getElementById('metadataBatchSize').value) || 30;
       const downloadBatchSize = parseInt(document.getElementById('downloadBatchSize').value) || 5;
-      const concurrency = parseInt(document.getElementById('concurrentPlaylists').value) || 3;
+      const concurrencyVal = concurrency;
       const rateLimit = parseInt(document.getElementById('rateLimit').value) || 0;
       
       // 설정 값 로그
       console.log("구독 확인 옵션:", {
         metadataBatchSize,
         downloadBatchSize,
-        concurrency,
-        rateLimit
+        concurrency: concurrencyVal,
+        rateLimit,
+        randomUa,
+        threadNics,
+        threadCookies
       });
       
       // 진행 상황 표시 업데이트
@@ -362,11 +381,13 @@ eagle.onPluginCreate(async (plugin) => {
       
       // 구독 확인 실행
       await subscriptionManager.checkAllSubscriptions(wrappedCallback, {
-        concurrency,
+        concurrency: concurrencyVal,
         metadataBatchSize,
         downloadBatchSize,
         rateLimit,
-        sourceAddress
+        randomUa,
+        threadNics,
+        threadCookies
       });
       
       // 진행 상황 표시 숨김
@@ -897,6 +918,36 @@ eagle.onPluginCreate(async (plugin) => {
         console.log('설정 - 제목 앞에 업로드날짜 붙이기:', prefixChk.checked);
       });
     }
+    
+    // Multi NIC & thread 옵션 업데이트 함수
+    function updateThreadOptions() {
+      const container = document.getElementById('threadOptionsContainer');
+      const optionsDiv = document.getElementById('threadOptions');
+      const multiNic = document.getElementById('multiNicChk').checked;
+      const concurrency = parseInt(document.getElementById('concurrentPlaylists').value) || 1;
+      optionsDiv.innerHTML = '';
+      if (!multiNic) {
+        container.classList.add('hidden');
+        return;
+      }
+      container.classList.remove('hidden');
+      for (let i = 1; i <= concurrency; i++) {
+        const row = document.createElement('div'); row.className = 'flex gap-2 items-center';
+        const labelNic = document.createElement('label'); labelNic.textContent = `Thread ${i} NIC:`;
+        const selNic = document.createElement('select'); selNic.id = `threadNicSel${i}`; selNic.className = 'border p-1';
+        document.getElementById('sourceAddressSelect').options.forEach(opt => selNic.append(opt.cloneNode(true)));
+        const labelCookie = document.createElement('label'); labelCookie.textContent = 'Cookie:';
+        const inpCookie = document.createElement('input'); inpCookie.type = 'file'; inpCookie.id = `threadCookieInput${i}`;
+        inpCookie.accept = '.txt,.cookie'; inpCookie.className = 'border p-1';
+        row.append(labelNic, selNic, labelCookie, inpCookie);
+        optionsDiv.appendChild(row);
+      }
+    }
+    // 이벤트 리스너 등록
+    document.getElementById('multiNicChk').addEventListener('change', updateThreadOptions);
+    document.getElementById('concurrentPlaylists').addEventListener('input', updateThreadOptions);
+    // 초기 thread 옵션 세팅
+    updateThreadOptions();
     
     console.log("UI 초기화 완료");
   }

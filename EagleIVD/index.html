@@ -248,6 +248,26 @@
             </select>
             <p class="text-xs text-gray-500 mt-1">다운로드 시 사용할 네트워크 인터페이스를 선택하세요</p>
           </div>
+          <div>
+            <label class="font-semibold block mb-1">Random User-Agent</label>
+            <input type="checkbox" id="randomUaChk">
+            <p class="text-xs text-gray-500 mt-1">각 스레드별 랜덤 User-Agent를 적용합니다.</p>
+          </div>
+          <div>
+            <label class="font-semibold block mb-1">Cookie File</label>
+            <input type="file" id="cookieFileInput" class="border p-2 w-full" accept=".txt,.cookie">
+            <p class="text-xs text-gray-500 mt-1">로그인 쿠키 파일(.txt)을 지정합니다.</p>
+          </div>
+          <div>
+            <label class="font-semibold block mb-1">Multi NIC</label>
+            <input type="checkbox" id="multiNicChk">
+            <p class="text-xs text-gray-500 mt-1">각 스레드별 서로 다른 NIC를 사용합니다.</p>
+          </div>
+        </div>
+        <!-- 스레드별 NIC/쿠키 설정 컨테이너 -->
+        <div id="threadOptionsContainer" class="mt-4 mb-4 hidden">
+          <h4 class="font-semibold mb-2">스레드별 네트워크 & 쿠키 설정</h4>
+          <div id="threadOptions" class="grid grid-cols-1 gap-2"></div>
         </div>
       </div>
     </div>
