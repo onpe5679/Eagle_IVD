@@ -50,65 +50,49 @@ class SubscriptionChecker {
     }
 
     try {
-      // 1단계: 각 구독의 새 영상 수를 확인
-      const subscriptionsWithNewVideoCount = [];
-      for (const sub of subscriptions) {
-        if (!this.isChecking) break;
-
+      // 1단계: 각 구독의 새 영상 수를 병렬로 확인
+      const metadataTasks = subscriptions.map(async (sub) => {
+        if (!this.isChecking) return null;
         try {
-          const phase1Args = [
-            "--skip-download",
-            "--flat-playlist",
-            "--print-json",
-            "--no-warnings",
-            "--ignore-errors",
-            sub.url
-          ];
+          // phase1 인자 준비
+          const args = ["--skip-download","--flat-playlist","--print-json","--no-warnings","--ignore-errors", sub.url];
           if (sourceAddress) {
-            phase1Args.unshift(sourceAddress);
-            phase1Args.unshift('--source-address');
+            args.unshift(sourceAddress);
+            args.unshift('--source-address');
           }
-
-          let fetchedVideoIds = [];
-          let playlistMetadata = null;
+          // yt-dlp 실행 및 JSON 파싱
+          const fetchedIds = [];
+          let playlistMeta = null;
           await new Promise((resolve) => {
-            const phase1Process = spawn(this.downloadManager.ytDlpPath, phase1Args);
-            let buffer = '';
-            phase1Process.stdout.on('data', (data) => {
-              buffer += data.toString();
-              const lines = buffer.split("\n");
-              buffer = lines.pop() || '';
+            const proc = spawn(this.downloadManager.ytDlpPath, args);
+            let buf = '';
+            proc.stdout.on('data', (d) => {
+              buf += d.toString();
+              const lines = buf.split("\n"); buf = lines.pop() || '';
               for (const line of lines) {
                 if (!line.trim()) continue;
                 try {
-                  if (line.startsWith('{')) {
-                    const item = JSON.parse(line);
-                    if (!playlistMetadata) playlistMetadata = item;
-                    if (item.id) {
-                      fetchedVideoIds.push(item.id);
-                    }
-                  }
-                } catch (e) {
-                  console.error('Phase1 JSON parse error:', e);
-                }
+                  const item = JSON.parse(line);
+                  if (!playlistMeta) playlistMeta = item;
+                  if (item.id) fetchedIds.push(item.id);
+                } catch {}
               }
             });
-            phase1Process.on('close', () => resolve());
+            proc.on('close', () => resolve());
           });
-
-          const existingIds = new Set(sub.videoIds || []);
-          const newCount = fetchedVideoIds.filter(id => !existingIds.has(id)).length;
-          subscriptionsWithNewVideoCount.push({ subscription: sub, newVideoCount: newCount });
-          console.log(`[Check] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" (${sub.url}) - ${newCount}개의 새 영상 발견`);
-        } catch (error) {
-          console.error(`[Error] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" (${sub.url}) - 확인 중 오류:`, error);
-          subscriptionsWithNewVideoCount.push({ subscription: sub, newVideoCount: 0 });
+          const existing = new Set(sub.videoIds || []);
+          const newCount = fetchedIds.filter(id => !existing.has(id)).length;
+          return { subscription: sub, newVideoCount: newCount };
+        } catch {
+          return { subscription: sub, newVideoCount: 0 };
         }
-      }
+      });
+      const resultsPhase1 = (await Promise.all(metadataTasks)).filter(r => r !== null);
+      const subscriptionsWithNewVideoCount = resultsPhase1;
+      console.log(`[Summary] 총 ${subscriptionsWithNewVideoCount.length}개의 재생목록 확인 완료`);
 
       // 2단계: 새 영상 수에 따라 정렬
       subscriptionsWithNewVideoCount.sort((a, b) => a.newVideoCount - b.newVideoCount);
-      console.log(`[Summary] 총 ${subscriptionsWithNewVideoCount.length}개의 재생목록 확인 완료`);
 
       // 3단계: 정렬된 순서대로 처리
       const results = [];
