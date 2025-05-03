@@ -3,6 +3,16 @@ const fs = require('fs').promises;
 const path = require('path');
 const subscriptionDb = require('./subscription-db');
 
+// Random User-Agent 리스트 및 선택 함수
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.96 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.5790.102 Safari/537.36'
+];
+function getRandomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
 /**
  * 구독 확인 로직을 담당하는 클래스
  */
@@ -39,7 +49,10 @@ class SubscriptionChecker {
       metadataBatchSize = 30,
       downloadBatchSize = 5,
       rateLimit = 0,
-      sourceAddress = ''
+      sourceAddress = '',
+      randomUa = false,
+      threadNics = [],
+      threadCookies = []
     } = options;
 
     const total = subscriptions.length;
@@ -100,13 +113,19 @@ class SubscriptionChecker {
         if (!this.isChecking) break;
         const batch = subscriptionsWithNewVideoCount.slice(i, i + concurrency);
         const batchResults = await Promise.all(
-          batch.map((item, idx) => this.checkSubscription(
-            item.subscription,
-            i + idx + 1,
-            total,
-            progressCallback,
-            options
-          ))
+          batch.map((item, idx) => {
+            // 스레드별 옵션 분기
+            const threadSource = threadNics[idx] || sourceAddress;
+            const threadCookie = threadCookies[idx] || '';
+            const threadUA = randomUa ? getRandomUserAgent() : '';
+            return this.checkSubscription(
+              item.subscription,
+              i + idx + 1,
+              total,
+              progressCallback,
+              { metadataBatchSize, downloadBatchSize, rateLimit, sourceAddress: threadSource, cookieFile: threadCookie, userAgent: threadUA }
+            );
+          })
         );
         results.push(...batchResults);
       }
@@ -131,7 +150,7 @@ class SubscriptionChecker {
     if (!this.isChecking) {
       return { subscription: sub, newVideos: 0, skippedVideos: 0, errorVideos: 0, stats: {} };
     }
-    const { metadataBatchSize = 30, downloadBatchSize = 5, rateLimit = 0, sourceAddress = '' } = options;
+    const { metadataBatchSize = 30, downloadBatchSize = 5, rateLimit = 0, sourceAddress = '', cookieFile = '', userAgent = '' } = options;
     if (progressCallback) {
       progressCallback(current, total, `플레이리스트 확인 중: ${sub.user_title || sub.youtube_title || sub.url}`);
     }
@@ -140,7 +159,9 @@ class SubscriptionChecker {
     try {
       // Phase 1: flat-playlist로 새 영상 ID 수집
       const phase1Args = ['--skip-download','--flat-playlist','--print-json','--no-warnings','--ignore-errors', sub.url];
-      if (sourceAddress) { phase1Args.unshift(sourceAddress,'--source-address'); }
+      if (userAgent) { phase1Args.unshift('--user-agent', userAgent); }
+      if (cookieFile) { phase1Args.unshift('--cookies', cookieFile); }
+      if (sourceAddress) { phase1Args.unshift(sourceAddress, '--source-address'); }
       let fetchedIds = [];
       let playlistMetadata = null;
       await new Promise(resolve => {
@@ -186,6 +207,8 @@ class SubscriptionChecker {
         const batchUrls = videoUrlBatches[i];
         this.updateStatusUI(`${sub.user_title || sub.youtube_title || sub.url}: 메타데이터 가져오는 중 (${i+1}/${videoUrlBatches.length})`);
         const metaArgs = ['--skip-download','--print-json','--no-warnings','--ignore-errors','--newline','--socket-timeout','30','--retries','1','--file-access-retries','1', ...batchUrls];
+        if (userAgent) { metaArgs.unshift(userAgent, '--user-agent'); }
+        if (cookieFile) { metaArgs.unshift(cookieFile, '--cookies'); }
         if (sourceAddress) { metaArgs.unshift(sourceAddress,'--source-address'); }
         await new Promise(resolve => {
           const mproc = spawn(this.downloadManager.ytDlpPath, metaArgs);
@@ -221,6 +244,8 @@ class SubscriptionChecker {
           '--progress', '--no-warnings', '--ignore-errors', '--newline',
           '--socket-timeout', '30', '--retries', '1', '--file-access-retries', '1'
         ];
+        if (userAgent) { args.unshift(userAgent, '--user-agent'); }
+        if (cookieFile) { args.unshift(cookieFile, '--cookies'); }
         if (sourceAddress) { args.unshift(sourceAddress, '--source-address'); }
         if (rateLimit > 0) { args.push('--limit-rate', `${rateLimit}K`); }
         if (sub.format === 'mp3') { args.push('-x', '--audio-format', 'mp3'); }
