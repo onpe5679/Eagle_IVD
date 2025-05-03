@@ -67,8 +67,12 @@ class SubscriptionManager extends EventEmitter {
     if (!subscriptionDb) {
       throw new Error("Database is not initialized yet.");
     }
-    // DB에서 모든 플레이리스트 조회
-    this.subscriptions = await subscriptionDb.getAllPlaylists();
+    // 현재 라이브러리의 플레이리스트만 조회
+    if (this.libraryId) {
+      this.subscriptions = await subscriptionDb.getPlaylistsByLibrary(this.libraryId);
+    } else {
+      this.subscriptions = await subscriptionDb.getAllPlaylists();
+    }
     return this.subscriptions;
   }
 

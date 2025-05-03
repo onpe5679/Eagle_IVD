@@ -1,6 +1,6 @@
 # Eagle IVD
 
-Eagle IVD는 eagle 전용 YouTube 동영상 다운로드 및 관리 플러그인입니다.
+Eagle IVD는 eagle 전용 자동 YouTube 재생목록 다운로드 및 관리 플러그인입니다.
 
 ## 프로젝트 구조
 
@@ -34,7 +34,7 @@ Eagle 라이브러리와 불일치 여부 검사 기능
 - Electron
 - Node.js
 - SQLite (sqlite3)
-- YouTube-dl
+- yt-dlp (exe사용)
 
 ## 의존성 패키지
 
@@ -45,7 +45,6 @@ Eagle 라이브러리와 불일치 여부 검사 기능
 - sqlite: ^5.1.1
 - sqlite3: ^5.1.7
 - youtube-dl-exec: ^3.0.12
-
 ## 개발 환경 설정
 
 1. Node.js 설치

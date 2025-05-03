@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "generatedAt": "2025-05-03T08:26:17.630Z",
+    "tasksAnalyzed": 3,
+    "thresholdScore": 5,
+    "projectName": "Your Project Name",
+    "usedResearch": false
+  },
+  "complexityAnalysis": [
+    {
+      "taskId": 8,
+      "taskTitle": "Eagle 라이브러리 변경 미반영 버그 수정",
+      "complexityScore": 7,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Break down the Eagle library change synchronization bug fix into specific implementation steps, including API polling mechanism, event listener implementation, database synchronization logic, UI status indicators, and testing procedures.",
+      "reasoning": "This task involves complex real-time synchronization mechanisms between an external API and local database, requiring changes to event handling, data synchronization, and UI feedback. The dependency and high priority indicate critical system functionality that needs careful implementation and testing."
+    },
+    {
+      "taskId": 9,
+      "taskTitle": "라이브러리 구분 기능 프론트엔드 반영 문제 해결",
+      "complexityScore": 6,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Detail the specific frontend components and state management changes needed to properly display library distinctions, including UI component updates, state management fixes, library switching logic, statistics display, and filtering/sorting functionality.",
+      "reasoning": "This task focuses on frontend UI and state management issues with multiple dependencies. It requires coordinated changes across several UI components and state handling logic to ensure consistent library selection display, proper state updates during transitions, and correct filtering functionality."
+    },
+    {
+      "taskId": 10,
+      "taskTitle": "상태표시 UI 1줄 고정 구현",
+      "complexityScore": 4,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Break down the implementation of a fixed single-line status UI into specific tasks including CSS layout modifications, text truncation with ellipsis, tooltip implementation for full text display, priority-based message display, and smooth transition animations.",
+      "reasoning": "This is a more focused UI enhancement task with moderate complexity. It involves CSS layout work, text handling, tooltip implementation, and animation effects, but is contained to a specific UI component. The single dependency suggests it builds on existing work rather than requiring extensive system changes."
+    }
+  ]
+}

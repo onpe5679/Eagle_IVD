@@ -105,6 +105,43 @@ eagle.onPluginCreate(async (plugin) => {
     return;
   }
 
+  // 라이브러리 변경 이벤트 핸들러 등록
+  if (eagleApi.onLibraryChanged) {
+    eagleApi.onLibraryChanged(async (libInfo) => {
+      try {
+        // libInfo가 undefined이거나 name이 없으면 강제로 라이브러리 정보 재조회
+        if (!libInfo || !libInfo.name) {
+          libInfo = await eagleApi.getLibraryInfo();
+        }
+        if (!libInfo || !libInfo.name) {
+          uiController.showError('라이브러리 정보를 불러올 수 없습니다.');
+          return;
+        }
+        let lib = await subscriptionDb.getLibraryByName(libInfo.name);
+        let libId;
+        if (!lib) {
+          libId = await subscriptionDb.addLibrary({
+            name: libInfo.name,
+            path: libInfo.path,
+            modificationTime: libInfo.modificationTime
+          });
+          await subscriptionDb.assignItemsToLibrary(libId);
+        } else {
+          libId = lib.id;
+        }
+        subscriptionManager.libraryId = libId;
+        // 구독목록 즉시 갱신
+        if (window.loadSubscriptions) {
+          await window.loadSubscriptions();
+        }
+        uiController.updateStatusUI(`라이브러리 변경됨: ${libInfo.name}`);
+      } catch (e) {
+        console.error('라이브러리 변경 처리 실패:', e);
+        uiController.showError(`라이브러리 변경 처리 실패: ${e.message}`);
+      }
+    });
+  }
+
   // 전역 UI 업데이트 함수
   window.updateUI = (message) => {
     // 직접 상태 영역 업데이트 (순환 호출 방지)
@@ -513,17 +550,6 @@ eagle.onPluginCreate(async (plugin) => {
       uiController.showError(`보고서 보기 실패: ${error.message}`);
     }
   };
-
-  // 라이브러리 변경 이벤트 처리
-  eagleApi.onLibraryChanged(async (libraryPath) => {
-    console.log('Library changed:', libraryPath);
-    uiController.appendLog(`라이브러리 변경 감지: ${libraryPath}`, false);
-    // 플러그인 재시작 시뮬레이션
-    window.updateUI('라이브러리가 변경되어 플러그인을 재시작합니다...');
-    setTimeout(() => {
-      location.reload();
-    }, 1000);
-  });
 
   // UI 초기화 함수
   function initializeUI() {

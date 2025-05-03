@@ -1,0 +1,57 @@
+<context>
+# Overview  
+Eagle IVD는 YouTube 재생목록을 자동으로 다운로드하고, 라이브러리와 동기화하는 데스크탑 앱입니다. 주로 Eagle 사용자들을 위한 플러그인 형태로 동작하며, 반복적이고 대량의 동영상 다운로드 및 관리 문제를 해결합니다. 주요 타겟은 미디어 수집, 백업, 자동화가 필요한 사용자입니다.
+
+# Core Features  
+- **YouTube 동영상 다운로드**: yt-dlp를 활용하여 재생목록 전체를 자동으로 다운로드
+- **메타데이터 동기화**: 다운로드한 영상의 메타데이터를 Eagle 라이브러리와 연동
+- **재생목록 구독 및 자동 다운로드**: 사용자가 원하는 재생목록을 구독하고, 새로운 영상이 추가되면 자동으로 다운로드
+- **다운로드 속도 제어 및 설정 UI**: 사용자별 네트워크 환경에 맞는 속도 제어 및 설정 제공
+- **NIC 선택 및 IP 우회**: 네트워크 인터페이스 카드(NIC) 선택 기능으로 IP 차단 우회 지원
+- **멀티쓰레딩 다운로드**: 재생목록별로 병렬 다운로드를 지원하여 속도 최적화
+- **중복 검사 및 통합**: 라이브러리 내 중복 파일 검사 및 통합 기능
+- **Eagle 라이브러리 불일치 검사**: Eagle 라이브러리와 실제 파일 간 불일치 여부 검사 및 리포트
+
+# User Experience  
+- **주요 사용자**: 미디어 수집가, 유튜브 아카이빙 유저, 자동화에 관심 있는 일반 사용자
+- **주요 플로우**: 
+  1. 앱 실행 → 재생목록 구독 추가 → 자동 다운로드 설정 → 다운로드/라이브러리 동기화 확인
+  2. 설정 UI에서 속도, NIC, 중복 검사 등 세부 옵션 조정
+- **UI/UX 고려사항**: 직관적인 구독/다운로드 관리, 진행상황 표시, 오류 및 중복 알림, 한글화 지원
+</context>
+<PRD>
+# Technical Architecture  
+- **System components**: Electron 기반 데스크탑 앱, Node.js 백엔드, SQLite DB, yt-dlp 연동, 자체 jsonDB
+- **Data models**: 재생목록(playlist), 비디오(video), 라이브러리(library) 테이블 구조, 구독 정보 json
+- **APIs and integrations**: yt-dlp CLI, Eagle 라이브러리 연동, 네트워크 인터페이스 제어
+- **Infrastructure requirements**: Windows 10 이상, Node.js, Electron, yt-dlp 실행파일 필요
+
+# Development Roadmap  
+- **MVP requirements**: 
+  - YouTube 재생목록 구독/다운로드/동기화
+  - 다운로드 속도 제어 및 설정 UI
+  - 중복 검사 및 라이브러리 통합
+  - 기본적인 오류 처리 및 리포트
+- **Future enhancements**:
+  - 다양한 플랫폼 지원(Mac/Linux)
+  - 고급 필터링/검색 기능
+  - 자동 업데이트 및 백그라운드 동작
+  - 사용자별 맞춤화 옵션
+
+# Logical Dependency Chain
+- 1단계: yt-dlp 연동 및 기본 다운로드 기능 구현
+- 2단계: 재생목록 구독/자동 다운로드 로직
+- 3단계: 라이브러리 동기화 및 중복 검사
+- 4단계: 설정 UI, 속도 제어, NIC 선택 등 부가 기능
+- 5단계: 오류 처리, 리포트, 한글화 등 사용자 경험 개선
+
+# Risks and Mitigations  
+- **yt-dlp API 변경/차단**: yt-dlp 업데이트 모니터링 및 대체 수단 마련
+- **대용량 다운로드 시 성능 저하**: 멀티쓰레딩, DB 최적화, 캐싱 적용
+- **Eagle 라이브러리 구조 변경**: 구조 변경 시 호환성 레이어 추가
+- **Resource constraints**: 오픈소스 활용, 커뮤니티 피드백 적극 반영
+
+# Appendix  
+- yt-dlp 공식 문서, Electron/Node.js/SQLite 레퍼런스
+- 실제 사용 예시 및 테스트 케이스
+</PRD> 
