@@ -935,7 +935,7 @@ eagle.onPluginCreate(async (plugin) => {
         const row = document.createElement('div'); row.className = 'flex gap-2 items-center';
         const labelNic = document.createElement('label'); labelNic.textContent = `Thread ${i} NIC:`;
         const selNic = document.createElement('select'); selNic.id = `threadNicSel${i}`; selNic.className = 'border p-1';
-        document.getElementById('sourceAddressSelect').options.forEach(opt => selNic.append(opt.cloneNode(true)));
+        Array.from(document.getElementById('sourceAddressSelect').options).forEach(opt => selNic.append(opt.cloneNode(true)));
         const labelCookie = document.createElement('label'); labelCookie.textContent = 'Cookie:';
         const inpCookie = document.createElement('input'); inpCookie.type = 'file'; inpCookie.id = `threadCookieInput${i}`;
         inpCookie.accept = '.txt,.cookie'; inpCookie.className = 'border p-1';
