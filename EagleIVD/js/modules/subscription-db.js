@@ -37,7 +37,7 @@ async function initDatabase(pluginPath) {
       youtube_title TEXT,
       videos_from_yt INTEGER,
       videos INTEGER,
-      url TEXT UNIQUE,
+      url TEXT,
       format TEXT,
       quality TEXT,
       first_created DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -115,6 +115,7 @@ async function getPlaylistByUrl(url) {
  * @param {object} p - playlist 객체
  */
 async function addPlaylist(p) {
+  // 신규 플레이리스트 추가
   const stmt = await db.run(
     `INSERT INTO playlists (user_title, youtube_title, videos_from_yt, videos, url, format, quality, auto_download, skip, library_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

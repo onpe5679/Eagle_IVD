@@ -6,7 +6,9 @@
 // Eagle 플러그인 환경에서 사용 가능한 모듈 로딩 방식
 let DownloadManager, EnhancedSubscriptionManager, LibraryMaintenance, eagleApi, utils, uiController;
 const subscriptionDb = require('../js/modules/subscription-db.js');
+const settings = require('../js/modules/settings.js');
 console.log("DB모듈 로드 성공");
+console.log("Settings 모듈 로드 성공");
 
 // 필요한 모듈 동적 로딩
 function loadModules() {
@@ -576,6 +578,36 @@ eagle.onPluginCreate(async (plugin) => {
   function initializeUI() {
     console.log("UI 초기화 시작");
     
+    // Load saved settings and apply to UI
+    settings.loadSettings().then(loadedSettings => {
+      // 기본 설정 로드
+      const prefixChk = document.getElementById('prefixUploadDateChk');
+      if (prefixChk) {
+        prefixChk.checked = loadedSettings.prefixUploadDate;
+        if (typeof subscriptionManager !== 'undefined') subscriptionManager.prefixUploadDate = loadedSettings.prefixUploadDate;
+      }
+      // 기타 설정 로드
+      document.getElementById('metadataBatchSize').value = loadedSettings.metadataBatchSize;
+      document.getElementById('downloadBatchSize').value = loadedSettings.downloadBatchSize;
+      document.getElementById('concurrentPlaylists').value = loadedSettings.concurrentPlaylists;
+      document.getElementById('rateLimit').value = loadedSettings.rateLimit;
+      document.getElementById('sourceAddressSelect').value = loadedSettings.sourceAddress;
+      document.getElementById('randomUaChk').checked = loadedSettings.randomUserAgent;
+      document.getElementById('multiNicChk').checked = loadedSettings.multiNic;
+      // threadOptions 초기화
+      updateThreadOptions();
+      if (Array.isArray(loadedSettings.threadOptions)) {
+        loadedSettings.threadOptions.forEach((opt, idx) => {
+          const i = idx + 1;
+          const nicSel = document.getElementById(`threadNicSel${i}`);
+          const cookieInp = document.getElementById(`threadCookieInput${i}`);
+          if (nicSel && opt.sourceAddress) nicSel.value = opt.sourceAddress;
+          if (cookieInp && opt.cookieFile) cookieInp.value = opt.cookieFile;
+        });
+      }
+
+    }).catch(err => console.error('Failed to load settings:', err));
+
     // 탭 관리
     const tabs = document.querySelectorAll('.tab-button');
     console.log("탭 요소 찾음:", tabs.length);
@@ -913,9 +945,44 @@ eagle.onPluginCreate(async (plugin) => {
     const prefixChk = document.getElementById('prefixUploadDateChk');
     if (prefixChk && typeof subscriptionManager !== 'undefined') {
       subscriptionManager.prefixUploadDate = prefixChk.checked;
-      prefixChk.addEventListener('change', () => {
-        subscriptionManager.prefixUploadDate = prefixChk.checked;
-        console.log('설정 - 제목 앞에 업로드날짜 붙이기:', prefixChk.checked);
+    }
+
+    // 설정 저장 버튼 이벤트 바인딩
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    if (saveSettingsBtn) {
+      saveSettingsBtn.addEventListener('click', async () => {
+        // 입력값 수집
+        const settingsObj = {
+          prefixUploadDate: document.getElementById('prefixUploadDateChk').checked,
+          metadataBatchSize: Number(document.getElementById('metadataBatchSize').value),
+          downloadBatchSize: Number(document.getElementById('downloadBatchSize').value),
+          concurrentPlaylists: Number(document.getElementById('concurrentPlaylists').value),
+          rateLimit: Number(document.getElementById('rateLimit').value),
+          sourceAddress: document.getElementById('sourceAddressSelect').value,
+          randomUserAgent: document.getElementById('randomUaChk').checked,
+          multiNic: document.getElementById('multiNicChk').checked
+        };
+        // 스레드별 NIC/쿠키 설정 수집
+        settingsObj.threadOptions = [];
+        for (let i = 1; i <= settingsObj.concurrentPlaylists; i++) {
+          const nicSel = document.getElementById(`threadNicSel${i}`);
+          const cookieInp = document.getElementById(`threadCookieInput${i}`);
+          settingsObj.threadOptions.push({
+            sourceAddress: nicSel ? nicSel.value : '',
+            cookieFile: cookieInp ? cookieInp.value : ''
+          });
+        }
+        try {
+          await settings.saveSettings(settingsObj);
+          const statusArea = document.getElementById('statusArea');
+          if (statusArea) {
+            statusArea.textContent = '설정이 저장되었습니다.';
+            setTimeout(() => { statusArea.textContent = 'Waiting...'; }, 2000);
+          }
+        } catch (err) {
+          const statusArea = document.getElementById('statusArea');
+          if (statusArea) statusArea.textContent = '설정 저장 실패: ' + err.message;
+        }
       });
     }
     

@@ -13,6 +13,18 @@ function getRandomUserAgent() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
+// ytdlp 인자 빌더: User-Agent, 쿠키, 소스주소 옵션과 기본 플래그 및 URL 결합
+function buildYtdlpArgs(urls, options, baseFlags) {
+  const args = [];
+  if (options.userAgent) args.push('--user-agent', options.userAgent);
+  if (options.cookieFile) args.push('--cookies', options.cookieFile);
+  if (options.sourceAddress) args.push('--source-address', options.sourceAddress);
+  args.push(...baseFlags);
+  if (Array.isArray(urls)) args.push(...urls);
+  else args.push(urls);
+  return args;
+}
+
 /**
  * 구독 확인 로직을 담당하는 클래스
  */
@@ -67,17 +79,20 @@ class SubscriptionChecker {
       const metadataTasks = subscriptions.map(async (sub) => {
         if (!this.isChecking) return null;
         try {
-          // phase1 인자 준비
-          const args = ["--skip-download","--flat-playlist","--print-json","--no-warnings","--ignore-errors", sub.url];
-          if (sourceAddress) {
-            args.unshift(sourceAddress);
-            args.unshift('--source-address');
-          }
-          // yt-dlp 실행 및 JSON 파싱
+          // metadata count 조회용 인자 (NIC, UA, Cookie 제외)
+          const args = buildYtdlpArgs(sub.url, { sourceAddress: '', userAgent: '', cookieFile: '' }, [
+            '--skip-download','--flat-playlist','--print-json','--no-warnings','--ignore-errors',
+            '--socket-timeout','30','--retries','1','--file-access-retries','1'
+          ]);
           const fetchedIds = [];
           let playlistMeta = null;
           await new Promise((resolve) => {
             const proc = spawn(this.downloadManager.ytDlpPath, args);
+            proc.stderr.on('data', () => {});
+            proc.on('error', (err) => {
+              console.error('yt-dlp metadataTasks error:', err);
+              resolve();
+            });
             let buf = '';
             proc.stdout.on('data', (d) => {
               buf += d.toString();
@@ -157,15 +172,16 @@ class SubscriptionChecker {
     const stats = { totalVideosFound: 0, newVideosFound: 0, processedVideos: 0, downloadedVideos: 0, skippedVideos: 0, errorVideos: 0 };
     const failedVideoErrors = new Map();
     try {
-      // Phase 1: flat-playlist로 새 영상 ID 수집
-      const phase1Args = ['--skip-download','--flat-playlist','--print-json','--no-warnings','--ignore-errors', sub.url];
-      if (userAgent) { phase1Args.unshift('--user-agent', userAgent); }
-      if (cookieFile) { phase1Args.unshift('--cookies', cookieFile); }
-      if (sourceAddress) { phase1Args.unshift(sourceAddress, '--source-address'); }
+      // Phase 1: flat-playlist 메타데이터 조회 args
+      const phase1Args = buildYtdlpArgs(sub.url, options, [
+        '--skip-download','--flat-playlist','--print-json','--no-warnings','--ignore-errors',
+        '--socket-timeout','30','--retries','1','--file-access-retries','1'
+      ]);
       let fetchedIds = [];
       let playlistMetadata = null;
       await new Promise(resolve => {
         const proc = spawn(this.downloadManager.ytDlpPath, phase1Args);
+        proc.on('error', err => { console.error('yt-dlp checkSubscription phase1 error:', err); resolve(); });
         let buf = '';
         proc.stdout.on('data', data => {
           buf += data.toString();
@@ -179,6 +195,7 @@ class SubscriptionChecker {
             } catch {}
           }
         });
+        proc.stderr.on('data', () => {});
         proc.on('close', () => resolve());
       });
       stats.totalVideosFound = fetchedIds.length;
@@ -197,7 +214,7 @@ class SubscriptionChecker {
         return { subscription: sub, newVideos: 0, skippedVideos: stats.skippedVideos, errorVideos: stats.errorVideos, stats };
       }
 
-      // Phase 2: 새 영상 메타데이터 취득 (batch size 단위)
+      // Phase 2: 새 영상 메타데이터 조회
       const videoUrlBatches = [];
       for (let i = 0; i < newVideoIds.length; i += metadataBatchSize) {
         videoUrlBatches.push(newVideoIds.slice(i, i + metadataBatchSize).map(id => `https://www.youtube.com/watch?v=${id}`));
@@ -206,10 +223,10 @@ class SubscriptionChecker {
       for (let i = 0; i < videoUrlBatches.length; i++) {
         const batchUrls = videoUrlBatches[i];
         this.updateStatusUI(`${sub.user_title || sub.youtube_title || sub.url}: 메타데이터 가져오는 중 (${i+1}/${videoUrlBatches.length})`);
-        const metaArgs = ['--skip-download','--print-json','--no-warnings','--ignore-errors','--newline','--socket-timeout','30','--retries','1','--file-access-retries','1', ...batchUrls];
-        if (userAgent) { metaArgs.unshift(userAgent, '--user-agent'); }
-        if (cookieFile) { metaArgs.unshift(cookieFile, '--cookies'); }
-        if (sourceAddress) { metaArgs.unshift(sourceAddress,'--source-address'); }
+        const metaArgs = buildYtdlpArgs(batchUrls, options, [
+          '--skip-download','--print-json','--no-warnings','--ignore-errors','--newline',
+          '--socket-timeout','30','--retries','1','--file-access-retries','1'
+        ]);
         await new Promise(resolve => {
           const mproc = spawn(this.downloadManager.ytDlpPath, metaArgs);
           let mBuf = '';
@@ -223,6 +240,11 @@ class SubscriptionChecker {
                 if (item.id) { downloadedMetadata[item.id] = item; stats.processedVideos++; }
               } catch {}
             }
+          });
+          mproc.stderr.on('data', () => {});
+          mproc.on('error', err => {
+            console.error('yt-dlp metadata batch error:', err);
+            resolve();
           });
           mproc.on('close', () => resolve());
         });
@@ -238,58 +260,68 @@ class SubscriptionChecker {
       for (let i = 0; i < newVideoIds.length; i += downloadBatchSize) {
         const batch = newVideoIds.slice(i, i + downloadBatchSize);
         console.log(`[Batch] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - ${i+1}~${Math.min(i+downloadBatchSize, newVideoIds.length)}/${newVideoIds.length} 처리 중`);
-        const args = [
+        // Phase 3: 실제 다운로드 처리 args
+        const downloadFlags = [
           '--ffmpeg-location', this.downloadManager.ffmpegPath,
           '-o', `${tempFolder}/%(id)s_%(title)s.%(ext)s`,
-          '--progress', '--no-warnings', '--ignore-errors', '--newline',
-          '--socket-timeout', '30', '--retries', '1', '--file-access-retries', '1'
+          '--progress','--no-warnings','--ignore-errors','--newline',
+          '--socket-timeout','30','--retries','1','--file-access-retries','1'
         ];
-        if (userAgent) { args.unshift(userAgent, '--user-agent'); }
-        if (cookieFile) { args.unshift(cookieFile, '--cookies'); }
-        if (sourceAddress) { args.unshift(sourceAddress, '--source-address'); }
-        if (rateLimit > 0) { args.push('--limit-rate', `${rateLimit}K`); }
-        if (sub.format === 'mp3') { args.push('-x', '--audio-format', 'mp3'); }
-        else if (sub.format === 'best') { args.push('-f', 'bv*+ba/b'); }
-        else { let fmt = sub.format; if (sub.quality) fmt += `-${sub.quality}`; args.push('-f', fmt); }
-        args.push(...batch.map(id => `https://www.youtube.com/watch?v=${id}`));
+        const args = buildYtdlpArgs(batch.map(id => `https://www.youtube.com/watch?v=${id}`), options, downloadFlags);
+        // 포맷 설정
+        if (sub.format === 'mp3') { args.push('-x','--audio-format','mp3'); }
+        else if (sub.format === 'best') { args.push('-f','bv*+ba/b'); }
+        else {
+          let fmt = sub.format;
+          if (sub.quality) fmt += `-${sub.quality}`;
+          args.push('-f',fmt);
+        }
         await new Promise(resolve => {
           const proc = spawn(this.downloadManager.ytDlpPath, args);
           proc.stdout.on('data', data => {
             const output = data.toString();
             this.updateStatusUI(output, true);
             if (output.includes('Destination:')) {
-              // 단순히 11자 ID만 추출 (중복 체크 없음 - 별도 library-maintenance에서 처리)
               const m = output.match(/Destination: .*[\\\/]([A-Za-z0-9_-]{11})_/);
               if (m && m[1]) {
                 successIds.push(m[1]);
                 stats.downloadedVideos++;
-                console.log(`[Success] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - 영상 다운로드 성공 (ID: ${m[1]})`);
               }
             }
           });
           proc.stderr.on('data', data => {
             const msg = data.toString();
-            // 디버그용 전체 stderr 출력
             console.error(`[Error] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" (${sub.url}) - 다운로드 오류:`, msg);
+
             // 다양한 패턴으로 영상 ID와 오류 메시지 추출
             let errorMatch = msg.match(/ERROR: \[youtube\] ([^:]+): (.+)/)
                         || msg.match(/ERROR: ([^:]+): (.+)/)
                         || msg.match(/WARNING: video download failed: ([^\s]+) - (.+)/i);
-            
+
             if (errorMatch) {
               const videoId = errorMatch[1];
               const errorMessage = errorMatch[2] || msg.trim();
               stats.errorVideos++;
-              // 실패한 영상 정보를 저장할 맵에 오류 메시지 추가
+              // 특정 videoId에 대한 오류 메시지 저장
               failedVideoErrors.set(videoId, errorMessage);
               this.updateStatusUI(`경고: 영상 다운로드 실패 (${videoId}): ${errorMessage}`);
             } else if (msg.includes('ERROR:') || msg.includes('WARNING:')) {
-              // 패턴 매칭 실패 시 전체 오류 메시지 저장
-              stats.errorVideos++;
+              stats.errorVideos++; // 에러 카운트는 증가
               this.updateStatusUI(`경고: 다운로드 실패 - ${msg.trim()}`);
+              // 특정 ID 추출 실패 시, 현재 배치 내 영상들에 일반 오류 메시지 기록
+              // (이미 특정 오류가 기록된 영상은 제외)
+              batch.forEach(videoId => {
+                if (!failedVideoErrors.has(videoId)) {
+                  failedVideoErrors.set(videoId, msg.trim());
+                }
+              });
             }
           });
-          proc.on('close', resolve);
+          proc.on('error', err => {
+            console.error('yt-dlp download error:', err);
+            resolve();
+          });
+          proc.on('close', () => resolve());
         });
       }
 
@@ -304,13 +336,13 @@ class SubscriptionChecker {
           downloaded: true,
           auto_download: sub.autoDownload || false,
           skip: false,
-          eagle_linked: false,
+          eagle_linked: false, // 초기 상태는 false, importer가 true로 변경
           source_playlist_url: sub.url,
           first_attempt: new Date().toISOString(),
           downloaded_at: new Date().toISOString(),
           library_id: this.libraryId
         };
-        console.log(`[DB] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - 성공한 영상 추가 중: ${metadata.title || videoId} (ID: ${videoId})`);
+        console.log(`[DB Add Success] Playlist "${sub.user_title || sub.youtube_title}": Adding ${metadata.title || videoId} (ID: ${videoId})`);
         try {
           await subscriptionDb.addVideo(videoData);
         } catch (dbError) {
@@ -336,7 +368,7 @@ class SubscriptionChecker {
           first_attempt: new Date().toISOString(),
           library_id: this.libraryId
         };
-        console.log(`[DB] 재생목록 "${sub.user_title || sub.youtube_title || '제목 없음'}" - 실패한 영상 기록 중: ${metadata.title || videoId} (ID: ${videoId})`);
+        console.log(`[DB Add Failed] Playlist "${sub.user_title || sub.youtube_title}": Recording failed video ${metadata.title || videoId} (ID: ${videoId})`);
         try {
           await subscriptionDb.addVideo(videoData);
         } catch (dbError) {
@@ -344,14 +376,19 @@ class SubscriptionChecker {
         }
       }
 
+      // 플레이리스트의 videoIds 업데이트 및 마지막 확인 시간 기록
       sub.videoIds = Array.from(new Set([...(sub.videoIds || []), ...newVideoIds]));
       sub.lastCheck = Date.now();
+
+      // Eagle에 임포트 및 임시 파일 정리
       await this.importer.importAndRemoveDownloadedFiles(tempFolder, sub.url, playlistMetadata, sub.folderName, downloadedMetadata);
-      try { await fs.rm(tempFolder, { recursive: true, force: true }); } catch {}
+      try { await fs.rm(tempFolder, { recursive: true, force: true }); } catch {} // 임시 폴더 삭제 시도
+
+      // 최종 결과 반환 (실제 다운로드 성공/실패 반영)
       return { subscription: sub, newVideos: stats.downloadedVideos, skippedVideos: stats.skippedVideos, errorVideos: stats.errorVideos, stats };
-    } catch (err) {
-      console.error(`구독 확인 오류 (${sub.url}):`, err);
-      return { subscription: sub, newVideos: 0, skippedVideos: stats.skippedVideos, errorVideos: stats.errorVideos, stats, error: err.message };
+    } catch (error) {
+      console.error('Subscription check error:', error);
+      return { subscription: sub, newVideos: 0, skippedVideos: 0, errorVideos: 1, stats: {} };
     }
   }
 
@@ -366,4 +403,4 @@ class SubscriptionChecker {
   }
 }
 
-module.exports = SubscriptionChecker; 
+module.exports = SubscriptionChecker;
