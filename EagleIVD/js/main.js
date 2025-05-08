@@ -3,7 +3,7 @@
  * 모든 모듈을 통합하고 플러그인 초기화 및 이벤트 핸들링
  */
 
-// Eagle 플러그인 환경에서 사용 가능한 모듈 로딩 방식
+const path = require('path');
 let DownloadManager, EnhancedSubscriptionManager, LibraryMaintenance, eagleApi, utils, uiController;
 const subscriptionDb = require('../js/modules/subscription-db.js');
 const settings = require('../js/modules/settings.js');
@@ -340,7 +340,7 @@ eagle.onPluginCreate(async (plugin) => {
     const sourceAddress = document.getElementById('sourceAddressSelect').value || '';
     // 차단 우회 옵션 읽기
     const randomUa = document.getElementById('randomUaChk')?.checked || false;
-    const cookieFile = document.getElementById('cookieFileInput')?.files[0]?.path || '';
+    const cookieFile = document.getElementById('cookieFileInput')?.value || '';
     const multiNic = document.getElementById('multiNicChk')?.checked || false;
     // 스레드별 NIC & 쿠키 배열
     let threadNics = [], threadCookies = [];
@@ -348,7 +348,7 @@ eagle.onPluginCreate(async (plugin) => {
     if (multiNic) {
       for (let i = 1; i <= concurrency; i++) {
         threadNics.push(document.getElementById(`threadNicSel${i}`)?.value || '');
-        threadCookies.push(document.getElementById(`threadCookieInput${i}`)?.files[0]?.path || '');
+        threadCookies.push(document.getElementById(`threadCookieInput${i}`)?.value || '');
       }
     } else {
       threadNics = Array(concurrency).fill(sourceAddress);
@@ -536,7 +536,6 @@ eagle.onPluginCreate(async (plugin) => {
   window.viewDuplicateReport = async () => {
     try {
       const fs = require('fs').promises;
-      const path = require('path');
       const reportPath = path.join(plugin.path, "duplicate-check-report.json");
       
       try {
@@ -557,7 +556,6 @@ eagle.onPluginCreate(async (plugin) => {
   window.viewConsistencyReport = async () => {
     try {
       const fs = require('fs').promises;
-      const path = require('path');
       const reportPath = path.join(plugin.path, "consistency-check-report.json");
       
       try {
@@ -576,493 +574,64 @@ eagle.onPluginCreate(async (plugin) => {
 
   // UI 초기화 함수
   function initializeUI() {
-    console.log("UI 초기화 시작");
+    console.log("[EagleIVD] initializeUI called.");
     
-    // Load saved settings and apply to UI
-    settings.loadSettings().then(loadedSettings => {
-      // 기본 설정 로드
-      const prefixChk = document.getElementById('prefixUploadDateChk');
-      if (prefixChk) {
-        prefixChk.checked = loadedSettings.prefixUploadDate;
-        if (typeof subscriptionManager !== 'undefined') subscriptionManager.prefixUploadDate = loadedSettings.prefixUploadDate;
-      }
-      // 기타 설정 로드
-      document.getElementById('metadataBatchSize').value = loadedSettings.metadataBatchSize;
-      document.getElementById('downloadBatchSize').value = loadedSettings.downloadBatchSize;
-      document.getElementById('concurrentPlaylists').value = loadedSettings.concurrentPlaylists;
-      document.getElementById('rateLimit').value = loadedSettings.rateLimit;
-      document.getElementById('sourceAddressSelect').value = loadedSettings.sourceAddress;
-      document.getElementById('randomUaChk').checked = loadedSettings.randomUserAgent;
-      document.getElementById('multiNicChk').checked = loadedSettings.multiNic;
-      // threadOptions 초기화
-      updateThreadOptions();
-      if (Array.isArray(loadedSettings.threadOptions)) {
-        loadedSettings.threadOptions.forEach((opt, idx) => {
-          const i = idx + 1;
-          const nicSel = document.getElementById(`threadNicSel${i}`);
-          const cookieInp = document.getElementById(`threadCookieInput${i}`);
-          if (nicSel && opt.sourceAddress) nicSel.value = opt.sourceAddress;
-          if (cookieInp && opt.cookieFile) cookieInp.value = opt.cookieFile;
-        });
-      }
-
-    }).catch(err => console.error('Failed to load settings:', err));
-
-    // 탭 관리
-    const tabs = document.querySelectorAll('.tab-button');
-    console.log("탭 요소 찾음:", tabs.length);
-    
-    tabs.forEach(tab => {
-      tab.addEventListener('click', () => {
-        console.log("탭 클릭됨:", tab.dataset.target);
-        uiController.showTab(tab.dataset.target);
-      });
+    // 설정 로드는 컨트롤러 로드와 독립적으로 먼저 수행될 수 있음
+    settings.loadSettings().then(async loadedSettings => {
+        console.log("[EagleIVD] Settings loaded in initializeUI.");
+        // 여기에 로드된 설정을 UI에 적용하는 로직 (예: document.getElementById(...).value = loadedSettings.xyz)
+        // 예시: const prefixChk = document.getElementById('prefixUploadDateChk'); if (prefixChk) prefixChk.checked = loadedSettings.prefixUploadDate;
+    }).catch(err => {
+        console.error('[EagleIVD] Failed to load settings in initializeUI:', err);
+        const statusArea = document.getElementById('statusArea');
+        if (statusArea) statusArea.textContent = "설정 로드 실패: " + err.message;
     });
+
+    // 컨트롤러 로드 (plugin.path 기준 절대 경로)
+    const basePath = plugin.path;
+    const ctrlDir = path.join(basePath, 'js', 'controllers');
+    console.log('[EagleIVD] Loading controllers from:', ctrlDir);
+    const settingsController = require(path.join(ctrlDir, 'settings-controller.js'));
+    const tabController = require(path.join(ctrlDir, 'tab-controller.js'));
+    const downloadController = require(path.join(ctrlDir, 'download-controller.js'));
+    const subscriptionController = require(path.join(ctrlDir, 'subscription-controller.js'));
+    const previewController = require(path.join(ctrlDir, 'preview-controller.js'));
+    const maintenanceController = require(path.join(ctrlDir, 'maintenance-controller.js'));
+     
+    console.log("[EagleIVD] Controllers potentially loaded.");
+
+    // 컨트롤러 초기화 및 이벤트 바인딩
+    // subscriptionManager, uiController 등은 이 시점 이전에 초기화되어 있어야 함
+    settingsController.initSettingsUI(subscriptionManager);
+    settingsController.bindSaveSettings();
+    settingsController.bindSettingsUI();
+    tabController.bindTabs();
+    downloadController.bindEvents(downloadManager, uiController);
+    subscriptionController.bindSubscriptionUI(subscriptionManager, uiController);
+    previewController.bindPreviewUI();
+    maintenanceController.bindMaintenanceUI();
     
     // 초기 탭 설정
     uiController.showTab('singleTab');
-    console.log("초기 탭 설정됨");
-
-    // 다운로드 버튼 이벤트 리스너
-    const downloadBtn = document.getElementById('downloadBtn');
-    if (downloadBtn) {
-      console.log("다운로드 버튼 찾음");
-      downloadBtn.addEventListener('click', () => {
-        // 중복 요청 방지
-        if (downloadBtn.disabled) {
-          console.log("다운로드가 이미 진행 중입니다.");
-          return;
-        }
-        
-        // 버튼 비활성화
-        downloadBtn.disabled = true;
-        downloadBtn.classList.add('opacity-50');
-        
-        // 취소 버튼 표시
-        const cancelBtn = document.getElementById('cancelBtn');
-        if (cancelBtn) {
-          cancelBtn.classList.remove('hidden');
-        }
-
-        const url = document.getElementById('singleUrl').value;
-        const format = document.getElementById('formatSelect').value;
-        const quality = document.getElementById('qualitySelect').value;
-        const speedLimit = document.getElementById('speedLimitInput').value;
-        const concurrency = document.getElementById('concurrencyInput').value;
-        
-        console.log("다운로드 버튼 클릭됨, URL:", url);
-        window.handleDownload(url, format, quality, speedLimit, concurrency)
-          .then(() => {
-            console.log("다운로드 완료");
-            // 버튼 상태 복원
-            downloadBtn.disabled = false;
-            downloadBtn.classList.remove('opacity-50');
-            
-            // 취소 버튼 숨김
-            if (cancelBtn) {
-              cancelBtn.classList.add('hidden');
-            }
-          })
-          .catch(error => {
-            console.error("다운로드 실패:", error);
-            // 버튼 상태 복원
-            downloadBtn.disabled = false;
-            downloadBtn.classList.remove('opacity-50');
-            
-            // 취소 버튼 숨김
-            if (cancelBtn) {
-              cancelBtn.classList.add('hidden');
-            }
-          });
-      });
-    } else {
-      console.error("다운로드 버튼을 찾을 수 없음");
+    // 초기 구독 목록 자동 로드
+    if (typeof window.loadSubscriptions === 'function') {
+      window.loadSubscriptions().catch(e => console.error('Initial loadSubscriptions failed:', e));
     }
-
-    // 플레이리스트 다운로드 버튼 이벤트 리스너
-    const playlistBtn = document.getElementById('downloadPlaylistBtn');
-    if (playlistBtn) {
-      console.log("플레이리스트 버튼 찾음");
-      playlistBtn.addEventListener('click', () => {
-        const url = document.getElementById('playlistUrl').value;
-        const format = document.getElementById('playlistFormat').value;
-        const quality = document.getElementById('playlistQuality').value;
-        const speedLimit = document.getElementById('playlistSpeedLimit').value;
-        const concurrency = document.getElementById('playlistConcurrency').value;
-        
-        console.log("플레이리스트 버튼 클릭됨, URL:", url);
-        window.handleDownloadPlaylist(url, format, quality, speedLimit, concurrency);
-      });
-    }
-
-    // 구독 관련 버튼 이벤트 리스너
-    const addSubscriptionBtn = document.getElementById('addSubscriptionBtn');
-    if (addSubscriptionBtn) {
-      console.log("구독 추가 버튼 찾음");
-      addSubscriptionBtn.addEventListener('click', () => {
-        console.log("구독 추가 버튼 클릭됨");
-        
-        const subType = document.querySelector('input[name="subType"]:checked').value;
-        const url = document.getElementById('newSubUrl').value;
-        const folder = document.getElementById('newSubFolder').value;
-        const format = document.getElementById('newSubFormat').value;
-        const quality = document.getElementById('newSubQuality').value;
-        
-        console.log(`구독 추가: ${subType}, URL: ${url}`);
-        
-        const subscriptionData = {
-          url: url,
-          folder: folder,
-          format: format,
-          quality: quality
-        };
-        
-        if (subType === 'channel') {
-          window.addChannelSubscription(subscriptionData);
-        } else {
-          window.addSubscription(subscriptionData);
-        }
-      });
-    } else {
-      console.error("구독 추가 버튼을 찾을 수 없음");
-    }
-    
-    // 새 비디오 확인 버튼
-    const checkNewBtn = document.getElementById('checkNewBtn');
-    if (checkNewBtn) {
-      console.log("새 비디오 확인 버튼 찾음");
-      checkNewBtn.addEventListener('click', () => {
-        console.log("새 비디오 확인 버튼 클릭됨");
-        window.checkAllSubscriptions();
-      });
-    }
-    
-    // 자동 확인 시작 버튼
-    const startAutoCheckBtn = document.getElementById('startAutoCheckBtn');
-    if (startAutoCheckBtn) {
-      console.log("자동 확인 시작 버튼 찾음");
-      startAutoCheckBtn.addEventListener('click', () => {
-        console.log("자동 확인 시작 버튼 클릭됨");
-        window.startAutoCheck(30); // 30분 간격으로 설정
-      });
-    }
-    
-    // 자동 확인 중지 버튼
-    const stopAutoCheckBtn = document.getElementById('stopAutoCheckBtn');
-    if (stopAutoCheckBtn) {
-      console.log("자동 확인 중지 버튼 찾음");
-      stopAutoCheckBtn.addEventListener('click', () => {
-        console.log("자동 확인 중지 버튼 클릭됨");
-        window.stopAutoCheck();
-      });
-    }
-    
-    // 취소 버튼들
-    const cancelButtons = [
-      document.getElementById('cancelBtn'),
-      document.getElementById('cancelPlaylistBtn'),
-      document.getElementById('cancelSubscriptionBtn')
-    ].filter(btn => btn !== null);
-    
-    console.log(`${cancelButtons.length}개의 취소 버튼 찾음`);
-    
-    cancelButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        console.log("취소 버튼 클릭됨");
-        window.cancelDownload();
-      });
-    });
-
-    // 클립보드 붙여넣기 기능
-    document.querySelectorAll('.paste-button').forEach(button => {
-      console.log("붙여넣기 버튼 찾음");
-      button.addEventListener('click', async () => {
-        try {
-          console.log("붙여넣기 버튼 클릭됨");
-          const text = await navigator.clipboard.readText();
-          const input = button.parentElement.querySelector('input');
-          input.value = text;
-          input.dispatchEvent(new Event('input')); // 입력 이벤트 발생
-          console.log("클립보드 텍스트 붙여넣기 성공:", text);
-        } catch (err) {
-          console.error('Failed to read clipboard:', err);
-          uiController.showError('Failed to read clipboard');
-        }
-      });
-    });
-
-    // YouTube URL 입력 시 자동 미리보기
-    const singleUrlInput = document.getElementById('singleUrl');
-    if (singleUrlInput) {
-      console.log("URL 입력 필드 찾음");
-      singleUrlInput.addEventListener('input', () => {
-        const url = singleUrlInput.value.trim();
-        if (url && url.includes('youtu')) {
-          console.log("YouTube URL 입력됨:", url);
-          
-          // 디바운스 처리 (입력이 잠시 멈췄을 때만 API 호출)
-          if (window.previewTimer) clearTimeout(window.previewTimer);
-          window.previewTimer = setTimeout(() => {
-            console.log("미리보기 가져오기 시도:", url);
-            window.fetchYoutubePreview(url);
-          }, 500);
-        }
-      });
-    }
-    
-    // 플레이리스트 URL 입력 필드도 동일하게 처리
-    const playlistUrlInput = document.getElementById('playlistUrl');
-    if (playlistUrlInput) {
-      playlistUrlInput.addEventListener('input', () => {
-        const url = playlistUrlInput.value.trim();
-        if (url && url.includes('youtu') && url.includes('list=')) {
-          if (window.playlistPreviewTimer) clearTimeout(window.playlistPreviewTimer);
-          window.playlistPreviewTimer = setTimeout(() => {
-            window.fetchYoutubePreview(url);
-          }, 500);
-        }
-      });
-    }
-
-    // 초기 구독 목록 로드
-    window.loadSubscriptions().then(subscriptions => {
-      console.log(`Loaded ${subscriptions.length} subscriptions`);
-    }).catch(error => {
-      console.error("Failed to load subscriptions in initializeUI:", error);
-      uiController.showError("Failed to load subscriptions");
-    });
-    
-    // 유지 관리 탭 버튼 이벤트 리스너
-    
-    // 중복 검사 버튼
-    const checkDuplicatesBtn = document.getElementById('checkDuplicatesBtn');
-    if (checkDuplicatesBtn) {
-      console.log("중복 검사 버튼 찾음");
-      checkDuplicatesBtn.addEventListener('click', () => {
-        console.log("중복 검사 버튼 클릭됨");
-        window.checkDuplicates();
-      });
-    } else {
-      console.error("중복 검사 버튼을 찾을 수 없음");
-    }
-    
-    // 일치성 검사 버튼
-    const checkConsistencyBtn = document.getElementById('checkConsistencyBtn');
-    if (checkConsistencyBtn) {
-      console.log("일치성 검사 버튼 찾음");
-      checkConsistencyBtn.addEventListener('click', () => {
-        console.log("일치성 검사 버튼 클릭됨");
-        window.checkConsistency();
-      });
-    } else {
-      console.error("일치성 검사 버튼을 찾을 수 없음");
-    }
-    
-    // 불일치 항목 수정 버튼
-    const fixInconsistenciesBtn = document.getElementById('fixInconsistenciesBtn');
-    if (fixInconsistenciesBtn) {
-      console.log("불일치 항목 수정 버튼 찾음");
-      fixInconsistenciesBtn.addEventListener('click', () => {
-        console.log("불일치 항목 수정 버튼 클릭됨");
-        window.fixInconsistencies();
-      });
-    } else {
-      console.error("불일치 항목 수정 버튼을 찾을 수 없음");
-    }
-
-    // DB에서 불일치 항목 삭제 버튼
-    const removeInconsistenciesBtn = document.getElementById('removeInconsistenciesBtn');
-    if (removeInconsistenciesBtn) {
-      console.log("DB에서 불일치 항목 삭제 버튼 찾음");
-      removeInconsistenciesBtn.addEventListener('click', async () => {
-        if (!confirm('정말로 DB에서 불일치 항목을 삭제하시겠습니까?')) {
-          return;
-        }
-        await libraryMaintenance.removeInconsistenciesFromDB();
-      });
-    } else {
-      console.error("DB에서 불일치 항목 삭제 버튼을 찾을 수 없음");
-    }
-    
-    // 유지 관리 취소 버튼
-    const cancelMaintenanceBtn = document.getElementById('cancelMaintenanceBtn');
-    if (cancelMaintenanceBtn) {
-      console.log("유지 관리 취소 버튼 찾음");
-      cancelMaintenanceBtn.addEventListener('click', () => {
-        console.log("유지 관리 취소 버튼 클릭됨");
-        window.cancelMaintenance();
-      });
-    } else {
-      console.error("유지 관리 취소 버튼을 찾을 수 없음");
-    }
-    
-    // 보고서 보기 버튼
-    const viewDuplicateReportBtn = document.getElementById('viewDuplicateReportBtn');
-    if (viewDuplicateReportBtn) {
-      console.log("중복 보고서 보기 버튼 찾음");
-      viewDuplicateReportBtn.addEventListener('click', () => {
-        console.log("중복 보고서 보기 버튼 클릭됨");
-        window.viewDuplicateReport();
-      });
-    } else {
-      console.error("중복 보고서 보기 버튼을 찾을 수 없음");
-    }
-    
-    const viewConsistencyReportBtn = document.getElementById('viewConsistencyReportBtn');
-    if (viewConsistencyReportBtn) {
-      console.log("일치성 보고서 보기 버튼 찾음");
-      viewConsistencyReportBtn.addEventListener('click', () => {
-        console.log("일치성 보고서 보기 버튼 클릭됨");
-        window.viewConsistencyReport();
-      });
-    } else {
-      console.error("일치성 보고서 보기 버튼을 찾을 수 없음");
-    }
-    
-    // NIC 목록 생성 및 옵션 추가
-    try {
-      const os = require('os');
-      const nicSelect = document.getElementById('sourceAddressSelect');
-      if (nicSelect) {
-        const nets = os.networkInterfaces();
-        Object.keys(nets).forEach(name => {
-          nets[name].forEach(net => {
-            if (net.family === 'IPv4' && !net.internal) {
-              const option = document.createElement('option');
-              option.value = net.address;
-              option.textContent = `${name} (${net.address})`;
-              nicSelect.appendChild(option);
-              console.log('Added NIC option:', name, net.address);
-            }
-          });
-        });
-      }
-    } catch (err) {
-      console.error('NIC 목록 생성 실패:', err);
-    }
-
-    // 설정 탭: '제목 앞에 업로드날짜 붙이기' 체크박스 바인딩
-    const prefixChk = document.getElementById('prefixUploadDateChk');
-    if (prefixChk && typeof subscriptionManager !== 'undefined') {
-      subscriptionManager.prefixUploadDate = prefixChk.checked;
-    }
-
-    // 설정 저장 버튼 이벤트 바인딩
-    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
-    if (saveSettingsBtn) {
-      saveSettingsBtn.addEventListener('click', async () => {
-        // 입력값 수집
-        const settingsObj = {
-          prefixUploadDate: document.getElementById('prefixUploadDateChk').checked,
-          metadataBatchSize: Number(document.getElementById('metadataBatchSize').value),
-          downloadBatchSize: Number(document.getElementById('downloadBatchSize').value),
-          concurrentPlaylists: Number(document.getElementById('concurrentPlaylists').value),
-          rateLimit: Number(document.getElementById('rateLimit').value),
-          sourceAddress: document.getElementById('sourceAddressSelect').value,
-          randomUserAgent: document.getElementById('randomUaChk').checked,
-          multiNic: document.getElementById('multiNicChk').checked
-        };
-        // 스레드별 NIC/쿠키 설정 수집
-        settingsObj.threadOptions = [];
-        for (let i = 1; i <= settingsObj.concurrentPlaylists; i++) {
-          const nicSel = document.getElementById(`threadNicSel${i}`);
-          const cookieInp = document.getElementById(`threadCookieInput${i}`);
-          settingsObj.threadOptions.push({
-            sourceAddress: nicSel ? nicSel.value : '',
-            cookieFile: cookieInp ? cookieInp.value : ''
-          });
-        }
-        try {
-          await settings.saveSettings(settingsObj);
-          const statusArea = document.getElementById('statusArea');
-          if (statusArea) {
-            statusArea.textContent = '설정이 저장되었습니다.';
-            setTimeout(() => { statusArea.textContent = 'Waiting...'; }, 2000);
-          }
-        } catch (err) {
-          const statusArea = document.getElementById('statusArea');
-          if (statusArea) statusArea.textContent = '설정 저장 실패: ' + err.message;
-        }
-      });
-    }
-    
-    // Multi NIC & thread 옵션 업데이트 함수
-    function updateThreadOptions() {
-      const container = document.getElementById('threadOptionsContainer');
-      const optionsDiv = document.getElementById('threadOptions');
-      const multiNic = document.getElementById('multiNicChk').checked;
-      const concurrency = parseInt(document.getElementById('concurrentPlaylists').value) || 1;
-      optionsDiv.innerHTML = '';
-      if (!multiNic) {
-        container.classList.add('hidden');
-        return;
-      }
-      container.classList.remove('hidden');
-      for (let i = 1; i <= concurrency; i++) {
-        const row = document.createElement('div'); row.className = 'flex gap-2 items-center';
-        const labelNic = document.createElement('label'); labelNic.textContent = `Thread ${i} NIC:`;
-        const selNic = document.createElement('select'); selNic.id = `threadNicSel${i}`; selNic.className = 'border p-1';
-        Array.from(document.getElementById('sourceAddressSelect').options).forEach(opt => selNic.append(opt.cloneNode(true)));
-        const labelCookie = document.createElement('label'); labelCookie.textContent = 'Cookie:';
-        const inpCookie = document.createElement('input'); inpCookie.type = 'file'; inpCookie.id = `threadCookieInput${i}`;
-        inpCookie.accept = '.txt,.cookie'; inpCookie.className = 'border p-1';
-        row.append(labelNic, selNic, labelCookie, inpCookie);
-        optionsDiv.appendChild(row);
-      }
-    }
-    // 이벤트 리스너 등록
-    document.getElementById('multiNicChk').addEventListener('change', updateThreadOptions);
-    document.getElementById('concurrentPlaylists').addEventListener('input', updateThreadOptions);
-    // 초기 thread 옵션 세팅
-    updateThreadOptions();
-    
-    console.log("UI 초기화 완료");
+    console.log("[EagleIVD] initializeUI complete.");
   }
 
-  // DOM이 준비되면 UI 초기화
-  document.addEventListener('DOMContentLoaded', () => {
-    console.log("DOMContentLoaded 이벤트 발생");
+  // initializeUI 호출
+  initializeUI();
+});
+
+// Eagle 플러그인 엔트리 포인트: plugin 객체를 통해 초기화
+module.exports = (plugin) => {
+  console.log('[EagleIVD] Plugin initialized. Path:', plugin.path);
+  plugin.on('run', () => {
+    console.log('[EagleIVD] onPluginRun: initializing UI and subscriptions');
     initializeUI();
+    if (typeof window.loadSubscriptions === 'function') {
+      window.loadSubscriptions().then(subs => console.log(`Loaded ${subs.length} subscriptions`)).catch(e => console.error('Failed to load subscriptions:', e));
+    }
   });
-  
-  // 페이지가 이미 로드되었는지 확인하고 즉시 UI 초기화
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    console.log("문서가 이미 로드됨, 즉시 UI 초기화");
-    setTimeout(initializeUI, 100); // 약간의 지연을 두고 초기화
-  }
-});
-
-// 플러그인 실행 이벤트
-eagle.onPluginRun(() => {
-  console.log("eagle.onPluginRun triggered");
-  
-  // 플러그인 실행 시 UI 초기화 및 구독 목록 로드
-  setTimeout(() => {
-    console.log("onPluginRun: UI 초기화 시도");
-    if (typeof initializeUI === 'function') {
-      initializeUI();
-    }
-    
-    if (window.loadSubscriptions) {
-      window.loadSubscriptions().then(subscriptions => {
-        console.log(`Loaded ${subscriptions.length} subscriptions`);
-      }).catch(error => {
-        console.error("Failed to load subscriptions onPluginRun:", error);
-      });
-    }
-  }, 500); // 충분한 로딩 시간 후 초기화
-});
-
-/**
- * 구독 삭제
- * @param {number} id - 구독 ID
- * @param {boolean} deleteVideos - 관련 영상도 함께 삭제할지 여부
- */
-async function removeSubscription(id, deleteVideos = false) {
-  try {
-    await subscriptionManager.removeSubscription(id, deleteVideos);
-    await loadSubscriptions();
-  } catch (error) {
-    console.error('Error removing subscription:', error);
-  }
-} 
+};

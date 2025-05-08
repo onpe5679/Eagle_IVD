@@ -5,6 +5,7 @@
 
 const fs = require("fs").promises;
 const path = require("path");
+const os = require("os");
 
 /**
  * FFmpeg 경로 가져오기
@@ -138,6 +139,36 @@ function sanitizeFilename(filename) {
   return filename.replace(/[/\\?%*:|"<>]/g, '_');
 }
 
+/**
+ * 시스템의 네트워크 인터페이스 목록 가져오기
+ * @returns {Array<{name: string, address: string}>} 네트워크 인터페이스 목록
+ */
+function getNetworkInterfaces() {
+  const interfaces = os.networkInterfaces();
+  const result = [];
+  
+  // 기본 값 추가
+  result.push({ name: 'Default', address: '' });
+  
+  // 각 네트워크 인터페이스 처리
+  for (const [name, netInterface] of Object.entries(interfaces)) {
+    // IPv4 주소만 필터링
+    const ipv4Interfaces = netInterface.filter(
+      iface => iface.family === 'IPv4' || iface.family === 4
+    );
+    
+    // 각 IPv4 인터페이스를 결과에 추가
+    ipv4Interfaces.forEach(iface => {
+      result.push({
+        name: `${name} (${iface.address})`,
+        address: iface.address
+      });
+    });
+  }
+  
+  return result;
+}
+
 // 모듈 내보내기
 module.exports = {
   getFFmpegPath,
@@ -148,5 +179,6 @@ module.exports = {
   getYoutubeVideoTitle,
   getYoutubeThumbnailUrl,
   formatDate,
-  sanitizeFilename
+  sanitizeFilename,
+  getNetworkInterfaces
 }; 
