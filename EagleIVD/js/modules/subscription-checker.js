@@ -308,23 +308,72 @@ class SubscriptionChecker {
       this.updateStatusUI(`${sub.user_title || sub.youtube_title || sub.url}: 중복 영상 검사 중...`);
       const duplicateIds = [];
       const duplicateProcessingResults = [];
-      let playlistFolderId = null;
+      let playlistFolderId = sub.eagle_folder_id || null;
+      let playlistFolderName = playlistSettings.folderName;
 
       // 재생목록 폴더 확인/생성
       try {
-        const allFolders = await eagle.folder.getAll();
-        const exactMatch = allFolders.filter(f => f.name === playlistSettings.folderName);
-        if (exactMatch.length > 0) {
-          playlistFolderId = exactMatch[0].id;
-          console.log(`[Phase1.5] 기존 폴더 사용: "${playlistSettings.folderName}" (ID: ${playlistFolderId})`);
-        } else {
-          const newFolder = await eagle.folder.create({ name: playlistSettings.folderName });
-          playlistFolderId = newFolder.id;
-          console.log(`[Phase1.5] 새 폴더 생성: "${playlistSettings.folderName}" (ID: ${playlistFolderId})`);
+        const eagleApi = (typeof window !== 'undefined' && window.eagle)
+          ? window.eagle
+          : (typeof globalThis !== 'undefined' ? globalThis.eagle : undefined);
+
+        if (!eagleApi || !eagleApi.folder) {
+          throw new Error('Eagle API is not available while resolving playlist folder');
+        }
+
+        const allFolders = await eagleApi.folder.getAll();
+
+        if (playlistFolderId) {
+          const storedFolder = allFolders.find(f => f.id === playlistFolderId);
+          if (storedFolder) {
+            playlistFolderName = storedFolder.name;
+            console.log(`[Phase1.5] 저장된 폴더 사용: "${playlistFolderName}" (ID: ${playlistFolderId})`);
+          } else {
+            console.warn(`[Phase1.5] 저장된 폴더 ID ${playlistFolderId}를 찾을 수 없어 이름으로 재검색합니다.`);
+            playlistFolderId = null;
+          }
+        }
+
+        const desiredName = (playlistFolderName && playlistFolderName.trim()) || 'Default Playlist';
+
+        if (!playlistFolderId) {
+          const existing = allFolders.find(f => f.name === desiredName);
+          if (existing) {
+            playlistFolderId = existing.id;
+            playlistFolderName = existing.name;
+            console.log(`[Phase1.5] 기존 폴더 사용: "${playlistFolderName}" (ID: ${playlistFolderId})`);
+          } else {
+            try {
+              const newFolder = await eagleApi.folder.create({ name: desiredName });
+              playlistFolderId = newFolder.id;
+              playlistFolderName = newFolder.name || desiredName;
+              console.log(`[Phase1.5] 새 폴더 생성: "${playlistFolderName}" (ID: ${playlistFolderId})`);
+            } catch (createError) {
+              if (createError?.message?.includes('already exists')) {
+                const refreshed = await eagleApi.folder.getAll();
+                const retry = refreshed.find(f => f.name === desiredName);
+                if (retry) {
+                  playlistFolderId = retry.id;
+                  playlistFolderName = retry.name;
+                  console.log(`[Phase1.5] 재시도 후 폴더 사용: "${playlistFolderName}" (ID: ${playlistFolderId})`);
+                }
+              } else {
+                throw createError;
+              }
+            }
+          }
+        }
+
+        if (playlistFolderId && sub.eagle_folder_id !== playlistFolderId) {
+          await subscriptionDb.updatePlaylistFolderId(sub.id, playlistFolderId);
+          sub.eagle_folder_id = playlistFolderId;
+          console.log(`[Phase1.5] DB에 폴더 ID 업데이트: ${playlistFolderId} (playlist ${sub.id})`);
         }
       } catch (folderError) {
         console.error(`[Phase1.5] 폴더 처리 오류:`, folderError);
       }
+
+      playlistSettings.folderName = playlistFolderName;
 
       // 각 새 영상에 대해 중복 검사
       for (const videoId of newVideoIds) {
@@ -337,9 +386,9 @@ class SubscriptionChecker {
             if (playlistFolderId) {
               // Eagle 아이템 업데이트 (폴더 추가 + annotation 업데이트)
               const success = await this.duplicateHandler.processDuplicateVideo(
-                duplicateInfo, 
-                playlistFolderId, 
-                playlistSettings.folderName,
+                duplicateInfo,
+                playlistFolderId,
+                playlistFolderName,
                 downloadedMetadata[videoId]
               );
               
@@ -409,7 +458,8 @@ class SubscriptionChecker {
         playlistDbId: sub.id,
         title: playlistSettings.title,
         url: sub.url,
-        folderName: playlistSettings.folderName,
+        folderName: playlistFolderName,
+        folderId: playlistFolderId,
         format: playlistSettings.format,
         quality: playlistSettings.quality,
         sourceAddress: playlistSettings.sourceAddress,
