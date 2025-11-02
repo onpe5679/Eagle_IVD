@@ -35,6 +35,7 @@ class SubscriptionImporter extends EventEmitter {
    * @param {string} customFolderName - 사용자 지정 폴더 이름
    * @param {object} videoMetadata - 각 비디오 ID별 메타데이터 매핑
    * @param {string[]} expectedVideoIds - 현재 처리 중인 영상 ID 리스트
+   * @param {object} playlistContext - 플레이리스트 컨텍스트 (playlistDbId, eagleFolderId)
    */
   async importAndRemoveDownloadedFiles(
     folder,
@@ -42,7 +43,8 @@ class SubscriptionImporter extends EventEmitter {
     metadata,
     customFolderName,
     videoMetadata = {},
-    expectedVideoIds = []
+    expectedVideoIds = [],
+    playlistContext = {}
   ) {
     try {
       const files = await fs.readdir(folder);

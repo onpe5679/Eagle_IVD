@@ -392,6 +392,12 @@ class VideoDownloadQueue extends EventEmitter {
                 eagleFolderId: videoItem.folderId
               };
 
+              // 플레이리스트 컨텍스트 구성
+              const playlistContext = {
+                playlistDbId: videoItem.playlistDbId,
+                eagleFolderId: videoItem.folderId
+              };
+
               // Eagle에 즉시 임포트
               await this.importer.importAndRemoveDownloadedFiles(
                 this.downloadManager.downloadFolder,
