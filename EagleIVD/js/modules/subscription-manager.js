@@ -322,8 +322,7 @@ class SubscriptionManager extends EventEmitter {
     metadata,
     customFolderName,
     videoMetadata = {},
-    expectedVideoIds = [],
-    playlistContext = {}
+    expectedVideoIds = []
   ) {
     return await this.importer.importAndRemoveDownloadedFiles(
       folder,
@@ -331,8 +330,7 @@ class SubscriptionManager extends EventEmitter {
       metadata,
       customFolderName,
       videoMetadata,
-      expectedVideoIds,
-      playlistContext
+      expectedVideoIds
     );
   }
 

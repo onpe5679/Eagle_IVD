@@ -42,8 +42,7 @@ class SubscriptionImporter extends EventEmitter {
     metadata,
     customFolderName,
     videoMetadata = {},
-    expectedVideoIds = [],
-    playlistContext = {}
+    expectedVideoIds = []
   ) {
     try {
       const files = await fs.readdir(folder);
