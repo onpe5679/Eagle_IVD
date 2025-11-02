@@ -4,9 +4,7 @@ const subscriptionDb = require('./subscription-db');
  * 라이브러리 내 중복 영상 처리를 담당하는 모듈
  */
 class DuplicateHandler {
-  constructor(libraryId) {
-    this.libraryId = libraryId;
-  }
+  constructor() {}
 
   /**
    * DB에서만 기존 다운로드된 영상인지 확인 (Eagle API 호출 제거)
@@ -19,11 +17,10 @@ class DuplicateHandler {
       const existingVideos = await subscriptionDb.getVideosByVideoId(videoId);
       
       // 현재 라이브러리에서 완전 처리된 원본 영상만 찾기
-      const originalRecord = existingVideos.find(video => 
-        video.video_id === videoId && 
-        video.library_id === this.libraryId && 
-        video.is_duplicate === 0 && 
-        video.downloaded === 1 && 
+      const originalRecord = existingVideos.find(video =>
+        video.video_id === videoId &&
+        video.is_duplicate === 0 &&
+        video.downloaded === 1 &&
         video.eagle_linked === 1
       );
 
@@ -181,7 +178,8 @@ class DuplicateHandler {
       videoId,
       title,
       masterVideoId,
-      metadata
+      metadata,
+      folderId
     } = params;
 
     const duplicateVideoData = {
@@ -197,8 +195,8 @@ class DuplicateHandler {
       master_video_id: masterVideoId,
       duplicate_check_date: new Date().toISOString(),
       source_playlist_url: `playlist_${playlistId}`,
-      library_id: this.libraryId,
-      first_attempt: new Date().toISOString()
+      first_attempt: new Date().toISOString(),
+      folder_id: folderId || null
     };
 
     try {

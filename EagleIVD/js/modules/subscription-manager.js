@@ -18,17 +18,14 @@ class SubscriptionManager extends EventEmitter {
   /**
    * 구독 관리자 초기화
    * @param {string} pluginPath - 플러그인 경로
-   * @param {number} libraryId - 라이브러리 ID
    */
-  constructor(pluginPath, libraryId) {
+  constructor(pluginPath) {
     super();
     this.pluginPath = pluginPath;
-    this.libraryId = libraryId;
     this.subscriptions = [];
     this.isChecking = false;
     this.downloadManager = null;
     this.checker = null;
-    this.importer = new SubscriptionImporter(this.updateStatusUI.bind(this), this.prefixUploadDate);
     this.stats = {
       duplicatesFound: 0,
       duplicatesResolved: 0,
@@ -37,14 +34,14 @@ class SubscriptionManager extends EventEmitter {
       errors: []
     };
     this.prefixUploadDate = true;
+    this.importer = new SubscriptionImporter(this.updateStatusUI.bind(this), this.prefixUploadDate);
   }
 
   /**
    * 데이터베이스 초기화 및 초기 구독 로드를 수행합니다.
    * @returns {Promise<void>}
-   */
+  */
   async initialize() {
-    await subscriptionDb.initDatabase(this.pluginPath);
     await this.loadSubscriptions();
     console.log("Subscription Manager initialized and subscriptions loaded.");
   }
@@ -52,10 +49,10 @@ class SubscriptionManager extends EventEmitter {
   /**
    * 다운로드 관리자 설정
    * @param {object} downloadManager - 다운로드 관리자 인스턴스
-   */
+  */
   setDownloadManager(downloadManager) {
     this.downloadManager = downloadManager;
-    this.checker = new SubscriptionChecker(downloadManager, this.updateStatusUI.bind(this), this.importer, this.libraryId);
+    this.checker = new SubscriptionChecker(downloadManager, this.updateStatusUI.bind(this), this.importer);
   }
 
   /**
@@ -67,12 +64,7 @@ class SubscriptionManager extends EventEmitter {
     if (!subscriptionDb) {
       throw new Error("Database is not initialized yet.");
     }
-    // 현재 라이브러리의 플레이리스트만 조회
-    if (this.libraryId) {
-      this.subscriptions = await subscriptionDb.getPlaylistsByLibrary(this.libraryId);
-    } else {
-      this.subscriptions = await subscriptionDb.getAllPlaylists();
-    }
+    this.subscriptions = await subscriptionDb.getAllPlaylists();
     return this.subscriptions;
   }
 
@@ -162,11 +154,9 @@ class SubscriptionManager extends EventEmitter {
       format: newSub.format,
       quality: newSub.quality,
       auto_download: newSub.autoDownload,
-      skip: newSub.skip,
-      library_id: this.libraryId
+      skip: newSub.skip
     });
     newSub.id = id;
-    newSub.library_id = this.libraryId;
     this.subscriptions.push(newSub);
 
     console.log(`Subscribed to playlist: ${newSub.title} (${url})`);
@@ -334,10 +324,9 @@ class EnhancedSubscriptionManager extends SubscriptionManager {
   /**
    * 향상된 구독 관리자 초기화
    * @param {string} pluginPath - 플러그인 경로
-   * @param {number} libraryId - 라이브러리 ID
    */
-  constructor(pluginPath, libraryId) {
-    super(pluginPath, libraryId);
+  constructor(pluginPath) {
+    super(pluginPath);
     this.checkInterval = null;
   }
   

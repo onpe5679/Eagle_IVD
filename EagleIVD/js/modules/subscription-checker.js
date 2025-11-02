@@ -54,15 +54,13 @@ class SubscriptionChecker {
    * @param {object} downloadManager - yt-dlp 호출을 위한 DownloadManager 인스턴스
    * @param {function} updateStatusUI - 상태 메시지 업데이트 콜백
    * @param {object} importer - 다운로드된 파일 임포트 로직 인스턴스
-   * @param {number} libraryId - 현재 라이브러리 ID
    */
-  constructor(downloadManager, updateStatusUI, importer, libraryId) {
+  constructor(downloadManager, updateStatusUI, importer) {
     this.downloadManager = downloadManager;
     this.updateStatusUI = updateStatusUI;
     this.importer = importer;
-    this.libraryId = libraryId;
     this.isChecking = false;
-    this.duplicateHandler = new DuplicateHandler(libraryId);
+    this.duplicateHandler = new DuplicateHandler();
   }
 
   /**
@@ -352,7 +350,8 @@ class SubscriptionChecker {
                   videoId: videoId,
                   title: duplicateInfo.title,
                   masterVideoId: duplicateInfo.dbRecordId,
-                  metadata: downloadedMetadata[videoId] || {}
+                  metadata: downloadedMetadata[videoId] || {},
+                  folderId: playlistFolderId
                 });
                 
                 duplicateProcessingResults.push({ videoId, status: 'success', action: 'duplicate_processed' });
@@ -516,20 +515,14 @@ class SubscriptionChecker {
           eagle_linked: false, // 초기 상태는 false, importer가 true로 변경
           source_playlist_url: sub.url,
           first_attempt: new Date().toISOString(),
-          downloaded_at: new Date().toISOString(),
-          library_id: this.libraryId
+          downloaded_at: new Date().toISOString()
         };
         console.log(`[DB Add Success] Playlist "${sub.user_title || sub.youtube_title}": Adding ${metadata.title || videoId} (ID: ${videoId})`);
         try {
           await subscriptionDb.addVideo(videoData);
           // Importer가 선행되어 DB 레코드가 없어서 eagle_linked 업데이트에 실패한 경우를 보완
           // (여기서 레코드가 방금 생성되었으므로 확실히 1로 설정)
-          try {
-            await subscriptionDb.markVideoAsEagleLinked(videoId, this.libraryId);
-            console.log(`[DB Update] Ensured eagle_linked=1 for ${videoId} in library ${this.libraryId} after addVideo`);
-          } catch (e) {
-            console.error(`[DB Add Success] Failed to set eagle_linked for ${videoId} in library ${this.libraryId}:`, e);
-          }
+          await subscriptionDb.markVideoAsEagleLinked(videoId);
         } catch (dbError) {
           console.error(`[DB AddVideo - Success] Error adding video ${videoId} for playlist ${sub.id}:`, dbError, videoData);
         }
@@ -549,8 +542,7 @@ class SubscriptionChecker {
           eagle_linked: false,
           source_playlist_url: sub.url,
           failed_reason: failedVideoErrors.get(videoId) || '알 수 없는 오류로 다운로드 실패',
-          first_attempt: new Date().toISOString(),
-          library_id: this.libraryId
+          first_attempt: new Date().toISOString()
         };
         console.log(`[DB Add Failed] Playlist "${sub.user_title || sub.youtube_title}": Recording failed video ${metadata.title || videoId} (ID: ${videoId})`);
         try {

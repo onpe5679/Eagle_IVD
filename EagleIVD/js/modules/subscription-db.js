@@ -4,29 +4,38 @@ const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 
 let db;
+let currentDbPath = null;
+
+function resolveLibraryDbPath(libraryPath) {
+  if (!libraryPath) {
+    throw new Error('Library path is required to initialize the database.');
+  }
+
+  const dbDir = path.join(libraryPath, '.eagleivd');
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+
+  return path.join(dbDir, 'ivd.db');
+}
 
 /**
  * 데이터베이스 초기화
- * @param {string} pluginPath - 플러그인 경로, DB 파일 위치 결정에 사용
+ * @param {string} libraryPath - Eagle 라이브러리 경로
  */
-async function initDatabase(pluginPath) {
-  // AppData/Local/EagleIVD 디렉토리 생성
-  const appDataPath = path.join(process.env.LOCALAPPDATA, 'EagleIVD');
-  if (!fs.existsSync(appDataPath)) {
-    fs.mkdirSync(appDataPath, { recursive: true });
+async function initDatabase(libraryPath) {
+  const dbPath = resolveLibraryDbPath(libraryPath);
+
+  if (db && currentDbPath === dbPath) {
+    return db;
   }
-  
-  const dbPath = path.join(appDataPath, 'ivd.db');
-  // 기존 DB에 library_id 컬럼 누락 시 초기화
-  if (fs.existsSync(dbPath)) {
-    const tempDb = await open({ filename: dbPath, driver: sqlite3.Database });
-    const cols = await tempDb.all('PRAGMA table_info(videos);');
-    await tempDb.close();
-    if (!cols.some(c => c.name === 'library_id')) {
-      // library_id 컬럼 없으면 파일 삭제하여 재생성
-      fs.unlinkSync(dbPath);
-    }
+
+  if (db && currentDbPath && currentDbPath !== dbPath) {
+    await db.close();
+    db = null;
   }
+
+  currentDbPath = dbPath;
   db = await open({ filename: dbPath, driver: sqlite3.Database });
 
   // WAL 모드 활성화 (동시성 향상)
@@ -49,8 +58,7 @@ async function initDatabase(pluginPath) {
       first_created DATETIME DEFAULT CURRENT_TIMESTAMP,
       last_checked DATETIME,
       auto_download INTEGER DEFAULT 0,
-      skip INTEGER DEFAULT 0,
-      library_id INTEGER
+      skip INTEGER DEFAULT 0
     );
   `);
 
@@ -73,7 +81,7 @@ async function initDatabase(pluginPath) {
       duplicate_check_date DATETIME,
       master_video_id TEXT,
       source_playlist_url TEXT,
-      library_id INTEGER,
+      folder_id TEXT,
       processing_lock INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -81,26 +89,8 @@ async function initDatabase(pluginPath) {
     );
   `);
 
-  // libraries 테이블 생성 및 라이브러리 컬럼 마이그레이션
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS libraries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE,
-      path TEXT,
-      modificationTime DATETIME
-    );
-  `);
-
   // 먼저 컬럼 체크 및 추가
-  const playlistCols = await db.all("PRAGMA table_info(playlists);");
-  if (!playlistCols.some(col => col.name === "library_id")) {
-    await db.exec("ALTER TABLE playlists ADD COLUMN library_id INTEGER;");
-  }
-  
   const videoCols = await db.all("PRAGMA table_info(videos);");
-  if (!videoCols.some(col => col.name === "library_id")) {
-    await db.exec("ALTER TABLE videos ADD COLUMN library_id INTEGER;");
-  }
   if (!videoCols.some(col => col.name === "processing_lock")) {
     await db.exec("ALTER TABLE videos ADD COLUMN processing_lock INTEGER DEFAULT 0;");
   }
@@ -114,6 +104,9 @@ async function initDatabase(pluginPath) {
     // Set current timestamp for existing records
     await db.exec("UPDATE videos SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;");
   }
+  if (!videoCols.some(col => col.name === "folder_id")) {
+    await db.exec("ALTER TABLE videos ADD COLUMN folder_id TEXT;");
+  }
 
   // 컬럼 추가 후 인덱스 생성 (성능 최적화)
   await db.exec(`CREATE INDEX IF NOT EXISTS idx_videos_playlist_id ON videos(playlist_id);`);
@@ -122,6 +115,7 @@ async function initDatabase(pluginPath) {
   await db.exec(`CREATE INDEX IF NOT EXISTS idx_videos_downloaded ON videos(downloaded);`);
   await db.exec(`CREATE INDEX IF NOT EXISTS idx_videos_eagle_linked ON videos(eagle_linked);`);
   await db.exec(`CREATE INDEX IF NOT EXISTS idx_videos_processing_lock ON videos(processing_lock);`);
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_videos_folder_id ON videos(folder_id);`);
 
   // 업데이트 트리거 생성 (updated_at 자동 업데이트)
   await db.exec(`
@@ -184,10 +178,10 @@ async function getPlaylistByUrl(url) {
 async function addPlaylist(p) {
   return await withTransaction(async (db) => {
     const stmt = await db.run(
-      `INSERT INTO playlists (user_title, youtube_title, videos_from_yt, videos, url, format, quality, auto_download, skip, library_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO playlists (user_title, youtube_title, videos_from_yt, videos, url, format, quality, auto_download, skip)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       p.user_title, p.youtube_title, p.videos_from_yt, p.videos, p.url,
-      p.format, p.quality, p.auto_download ? 1 : 0, p.skip ? 1 : 0, p.library_id
+      p.format, p.quality, p.auto_download ? 1 : 0, p.skip ? 1 : 0
     );
     return stmt.lastID;
   });
@@ -313,8 +307,8 @@ async function addVideo(v) {
       `INSERT INTO videos (
         playlist_id, video_id, title, status, downloaded, auto_download,
         skip, eagle_linked, failed_reason, first_attempt, downloaded_at,
-        is_duplicate, duplicate_check_date, master_video_id, source_playlist_url, 
-        library_id, processing_lock
+        is_duplicate, duplicate_check_date, master_video_id, source_playlist_url,
+        folder_id, processing_lock
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       v.playlist_id, v.video_id, v.title, v.status || 'pending',
       v.downloaded ? 1 : 0, v.auto_download ? 1 : 0, v.skip ? 1 : 0,
@@ -322,7 +316,7 @@ async function addVideo(v) {
       v.first_attempt || null, v.downloaded_at || null,
       v.is_duplicate ? 1 : 0, v.duplicate_check_date || null,
       v.master_video_id || null, v.source_playlist_url || null,
-      v.library_id || null, 1 // 처리 중으로 시작
+      v.folder_id || null, 1 // 처리 중으로 시작
     );
     
     console.log(`[DB] Added new video ${v.video_id} with processing lock`);
@@ -410,26 +404,25 @@ async function getVideosByVideoId(videoId) {
 }
 
 /**
- * video_id를 사용하여 특정 라이브러리의 영상의 eagle_linked 상태를 1로 업데이트합니다.
+ * video_id를 사용하여 영상의 eagle_linked 상태를 1로 업데이트합니다.
  * @param {string} videoId
- * @param {number} libraryId - 라이브러리 ID (선택적, 없으면 모든 라이브러리)
+ * @param {string} [folderId] - 영상이 속한 Eagle 폴더 ID
  */
-async function markVideoAsEagleLinked(videoId, libraryId = null) {
+async function markVideoAsEagleLinked(videoId, folderId = undefined) {
   return await withTransaction(async (db) => {
-    let query, params;
-    
-    if (libraryId !== null) {
-      // 특정 라이브러리의 영상만 업데이트
-      query = 'UPDATE videos SET eagle_linked = 1, processing_lock = 0 WHERE video_id = ? AND library_id = ?';
-      params = [videoId, libraryId];
-    } else {
-      // 모든 라이브러리의 해당 영상 업데이트 (기존 동작 유지)
-      query = 'UPDATE videos SET eagle_linked = 1, processing_lock = 0 WHERE video_id = ?';
-      params = [videoId];
+    let query = 'UPDATE videos SET eagle_linked = 1, processing_lock = 0';
+    const params = [];
+
+    if (folderId !== undefined) {
+      query += ', folder_id = ?';
+      params.push(folderId);
     }
-    
+
+    query += ' WHERE video_id = ?';
+    params.push(videoId);
+
     const result = await db.run(query, params);
-    console.log(`[DB] Marked video ${videoId} as eagle_linked ${libraryId ? `(library: ${libraryId})` : '(all libraries)'} (affected rows: ${result.changes})`);
+    console.log(`[DB] Marked video ${videoId} as eagle_linked (affected rows: ${result.changes})`);
     return result.changes > 0;
   });
 }
@@ -517,45 +510,6 @@ async function updatePlaylistSummary(id, { last_checked, videos_from_yt } = {}) 
   return updatePlaylist(id, fields);
 }
 
-// 라이브러리 추가
-async function addLibrary(lib) {
-  return await withTransaction(async (db) => {
-    const stmt = await db.run(
-      `INSERT OR IGNORE INTO libraries (name, path, modificationTime) VALUES (?, ?, ?)`,
-      lib.name, lib.path, lib.modificationTime || null
-    );
-    if (stmt.lastID) return stmt.lastID;
-    const row = await db.get(`SELECT id FROM libraries WHERE name = ?`, lib.name);
-    return row.id;
-  });
-}
-
-// 라이브러리 조회 (이름 기준)
-async function getLibraryByName(name) {
-  return await db.get(`SELECT * FROM libraries WHERE name = ?`, name);
-}
-
-// 라이브러리 경로 기준 조회
-async function getLibraryByPath(path) {
-  return await db.get(`SELECT * FROM libraries WHERE path = ?`, path);
-}
-
-// 특정 라이브러리의 플레이리스트 조회
-async function getPlaylistsByLibrary(libraryId) {
-  return await db.all(
-    `SELECT * FROM playlists WHERE library_id = ? ORDER BY id`,
-    libraryId
-  );
-}
-
-// 기존 플레이리스트/비디오에 라이브러리 할당 (초기 마이그레이션)
-async function assignItemsToLibrary(libraryId) {
-  return await withTransaction(async (db) => {
-    await db.run(`UPDATE playlists SET library_id = ? WHERE library_id IS NULL`, libraryId);
-    await db.run(`UPDATE videos SET library_id = ? WHERE library_id IS NULL`, libraryId);
-  });
-}
-
 module.exports = {
   initDatabase,
   getAllPlaylists,
@@ -570,11 +524,6 @@ module.exports = {
   deleteVideoByVideoId,
   getVideosByVideoId,
   markVideoAsEagleLinked,
-  addLibrary,
-  getLibraryByName,
-  getLibraryByPath,
-  getPlaylistsByLibrary,
-  assignItemsToLibrary,
   withTransaction,
   releaseVideoProcessingLock,
   markVideoDownloadComplete,
