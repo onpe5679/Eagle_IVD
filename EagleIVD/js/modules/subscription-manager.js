@@ -274,8 +274,22 @@ class SubscriptionManager extends EventEmitter {
    * @param {object} videoMetadata - 개별 영상 메타데이터
    * @returns {Promise<void>}
    */
-  async importAndRemoveDownloadedFiles(folder, url, metadata, customFolderName, videoMetadata = {}) {
-    return await this.importer.importAndRemoveDownloadedFiles(folder, url, metadata, customFolderName, videoMetadata);
+  async importAndRemoveDownloadedFiles(
+    folder,
+    url,
+    metadata,
+    customFolderName,
+    videoMetadata = {},
+    expectedVideoIds = []
+  ) {
+    return await this.importer.importAndRemoveDownloadedFiles(
+      folder,
+      url,
+      metadata,
+      customFolderName,
+      videoMetadata,
+      expectedVideoIds
+    );
   }
 
   /**
