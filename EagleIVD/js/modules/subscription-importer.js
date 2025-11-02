@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const EventEmitter = require('events');
-  const subscriptionDb = require('./subscription-db'); // DB 모듈 추가
+const subscriptionDb = require('./subscription-db'); // DB 모듈 추가
 
 /**
  * 다운로드된 파일을 Eagle에 추가하고 정리하는 로직
@@ -10,13 +10,11 @@ class SubscriptionImporter extends EventEmitter {
   /**
    * @param {function} updateStatusUI - 상태 메시지 업데이트 콜백
    * @param {boolean} prefixUploadDate - 파일명 앞에 업로드 날짜를 붙일지 여부
-   * @param {number} libraryId - 라이브러리 ID
    */
-  constructor(updateStatusUI, prefixUploadDate = true, libraryId = null) {
+  constructor(updateStatusUI, prefixUploadDate = true) {
     super();
     this.updateStatusUI = updateStatusUI;
     this.prefixUploadDate = prefixUploadDate;
-    this.libraryId = libraryId;
   }
 
   /**
@@ -187,14 +185,13 @@ Video ID: ${videoId || 'Unknown'}`,
             // Eagle 추가 성공 시 DB 업데이트 (라이브러리별 분리)
             try {
               if (videoId) {
-                console.log(`[DB Debug] Attempting to mark video ${videoId} as eagle_linked for library ${this.libraryId}`);
-                await subscriptionDb.markVideoAsEagleLinked(videoId, this.libraryId);
-                console.log(`[DB Update] Successfully marked video ${videoId} as eagle_linked for library ${this.libraryId}`);
+                await subscriptionDb.markVideoAsEagleLinked(videoId, playlistFolderId);
+                console.log(`[DB Update] Successfully marked video ${videoId} as eagle_linked.`);
               } else {
                 console.warn(`[DB Update] videoId is null/undefined for file: ${file}`);
               }
             } catch (dbError) {
-              console.error(`[DB Update] Failed to mark video ${videoId} as eagle_linked for library ${this.libraryId}:`, dbError);
+              console.error(`[DB Update] Failed to mark video ${videoId} as eagle_linked:`, dbError);
             }
           } catch (addErr) {
             if (addErr.message === 'Import timeout') {
@@ -221,10 +218,10 @@ Video ID: ${videoId || 'Unknown'}`,
                   
                   // 중복 항목 처리 시에도 DB 업데이트 (라이브러리별 분리)
                   try {
-                    await subscriptionDb.markVideoAsEagleLinked(videoId, this.libraryId);
-                    console.log(`[DB Update] Marked existing video ${videoId} as eagle_linked for library ${this.libraryId}.`);
+                    await subscriptionDb.markVideoAsEagleLinked(videoId, playlistFolderId);
+                    console.log(`[DB Update] Marked existing video ${videoId} as eagle_linked.`);
                   } catch (dbError) {
-                    console.error(`[DB Update] Failed to mark existing video ${videoId} as eagle_linked for library ${this.libraryId}:`, dbError);
+                    console.error(`[DB Update] Failed to mark existing video ${videoId} as eagle_linked:`, dbError);
                   }
                 } else {
                   console.warn(`No existing item found for URL: ${searchURL}`);
