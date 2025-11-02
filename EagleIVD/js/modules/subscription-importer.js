@@ -42,10 +42,8 @@ class SubscriptionImporter extends EventEmitter {
     metadata,
     customFolderName,
     videoMetadata = {},
-    expectedVideoIds = [],
-    playlistContextArg = {}
+    expectedVideoIds = []
   ) {
-    const playlistContext = playlistContextArg || {};
     try {
       const files = await fs.readdir(folder);
       console.log("Files in directory:", files);
@@ -61,10 +59,9 @@ class SubscriptionImporter extends EventEmitter {
       let folderName = customFolderName && customFolderName.trim() ?
         customFolderName : (metadata.playlist || this.getPlaylistId(url) || "Default Playlist");
 
-      const { playlistDbId = null, eagleFolderId: contextFolderId = null } = playlistContext;
+      const { playlistDbId = null, eagleFolderId: contextFolderId = null } = playlistContext || {};
       let playlistFolderId = contextFolderId || metadata?.eagleFolderId || null;
       let playlistRecord = null;
-      let eagleApi = null;
 
       if (playlistDbId && !playlistFolderId) {
         try {
@@ -79,11 +76,11 @@ class SubscriptionImporter extends EventEmitter {
 
       // 기존 폴더 확인 또는 생성
       try {
-        eagleApi = (typeof window !== 'undefined' && window.eagle)
+        const eagleApi = (typeof window !== 'undefined' && window.eagle)
           ? window.eagle
           : (typeof globalThis !== 'undefined' ? globalThis.eagle : undefined);
 
-        if (!eagleApi || !eagleApi.folder || !eagleApi.item) {
+        if (!eagleApi || !eagleApi.folder) {
           throw new Error('Eagle API is not available while resolving playlist folder');
         }
 
@@ -146,10 +143,6 @@ class SubscriptionImporter extends EventEmitter {
       } catch (err) {
         console.error("Error in folder operations:", err);
         throw err;
-      }
-
-      if (!eagleApi || !eagleApi.item) {
-        throw new Error('Eagle API is not available for item operations');
       }
 
       const shouldFilterByIds = Array.isArray(expectedVideoIds) && expectedVideoIds.length > 0;

@@ -399,11 +399,7 @@ class VideoDownloadQueue extends EventEmitter {
                 playlistMetadata,
                 videoItem.folderName,
                 videoMetadata,
-                [videoItem.id],
-                {
-                  playlistDbId: videoItem.playlistDbId,
-                  eagleFolderId: videoItem.folderId
-                }
+                [videoItem.id]
               );
               
               console.log(`✅ [Thread-${threadId}] Eagle import completed for: ${videoItem.title}`);
