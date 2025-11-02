@@ -36,7 +36,8 @@ class VideoDownloadItem {
     this.playlistDbId = playlistInfo.playlistDbId || null;
     this.playlistTitle = playlistInfo.title;
     this.folderName = playlistInfo.folderName || playlistInfo.title;
-    
+    this.folderId = playlistInfo.folderId || null;
+
     // 다운로드 설정
     this.format = playlistInfo.format || 'best';
     this.quality = playlistInfo.quality || '';
@@ -386,9 +387,11 @@ class VideoDownloadQueue extends EventEmitter {
               const playlistMetadata = {
                 playlist: videoItem.playlistTitle,
                 uploader: videoItem.uploader,
-                id: videoItem.playlistId
+                id: videoItem.playlistId,
+                playlistDbId: videoItem.playlistDbId,
+                eagleFolderId: videoItem.folderId
               };
-              
+
               // Eagle에 즉시 임포트
               await this.importer.importAndRemoveDownloadedFiles(
                 this.downloadManager.downloadFolder,

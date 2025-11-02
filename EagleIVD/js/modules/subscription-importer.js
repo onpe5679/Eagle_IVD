@@ -56,39 +56,89 @@ class SubscriptionImporter extends EventEmitter {
       ]);
 
       // 폴더명 결정: customFolderName 우선, 없으면 fallback
-      const folderName = customFolderName && customFolderName.trim() ? 
+      let folderName = customFolderName && customFolderName.trim() ?
         customFolderName : (metadata.playlist || this.getPlaylistId(url) || "Default Playlist");
 
+      const { playlistDbId = null, eagleFolderId: contextFolderId = null } = playlistContext || {};
+      let playlistFolderId = contextFolderId || metadata?.eagleFolderId || null;
+      let playlistRecord = null;
+
+      if (playlistDbId && !playlistFolderId) {
+        try {
+          playlistRecord = await subscriptionDb.getPlaylistById(playlistDbId);
+          if (playlistRecord?.eagle_folder_id) {
+            playlistFolderId = playlistRecord.eagle_folder_id;
+          }
+        } catch (dbErr) {
+          console.warn(`[Importer] Failed to load playlist record ${playlistDbId}:`, dbErr);
+        }
+      }
+
       // 기존 폴더 확인 또는 생성
-      let playlistFolderId = null;
-      console.log(`Looking for existing folder: "${folderName}"`);
       try {
-        const allFolders = await eagle.folder.getAll();
-        console.log(`Total folders: ${allFolders.length}`);
-        const exactMatch = allFolders.filter(f => f.name === folderName);
-        if (exactMatch.length > 0) {
-          playlistFolderId = exactMatch[0].id;
-          console.log(`Using existing folder: "${folderName}" (ID: ${playlistFolderId})`);
-        } else {
-          try {
-            const newFolder = await eagle.folder.create({ name: folderName });
-            playlistFolderId = newFolder.id;
-            console.log(`Created new folder: "${folderName}" (ID: ${playlistFolderId})`);
-          } catch (createError) {
-            if (createError.message.includes("already exists")) {
-              const updated = await eagle.folder.getAll();
-              const retry = updated.filter(f => f.name === folderName);
-              if (retry.length > 0) {
-                playlistFolderId = retry[0].id;
-                console.log(`Using newly found folder: "${folderName}" (ID: ${playlistFolderId})`);
+        const eagleApi = (typeof window !== 'undefined' && window.eagle)
+          ? window.eagle
+          : (typeof globalThis !== 'undefined' ? globalThis.eagle : undefined);
+
+        if (!eagleApi || !eagleApi.folder) {
+          throw new Error('Eagle API is not available while resolving playlist folder');
+        }
+
+        const allFolders = await eagleApi.folder.getAll();
+        console.log(`Looking for existing folder: id=${playlistFolderId || 'null'}, name="${folderName}"`);
+
+        if (playlistFolderId) {
+          const storedFolder = allFolders.find(f => f.id === playlistFolderId);
+          if (storedFolder) {
+            folderName = storedFolder.name;
+            console.log(`Using stored folder by ID: "${folderName}" (ID: ${playlistFolderId})`);
+          } else {
+            console.warn(`[Importer] Stored folder ID ${playlistFolderId} not found. Falling back to name search.`);
+            playlistFolderId = null;
+          }
+        }
+
+        const desiredName = (folderName && folderName.trim()) || 'Default Playlist';
+
+        if (!playlistFolderId) {
+          const existing = allFolders.find(f => f.name === desiredName);
+          if (existing) {
+            playlistFolderId = existing.id;
+            folderName = existing.name;
+            console.log(`Using existing folder by name: "${folderName}" (ID: ${playlistFolderId})`);
+          } else {
+            try {
+              const newFolder = await eagleApi.folder.create({ name: desiredName });
+              playlistFolderId = newFolder.id;
+              folderName = newFolder.name || desiredName;
+              console.log(`Created new folder: "${folderName}" (ID: ${playlistFolderId})`);
+            } catch (createError) {
+              if (createError?.message?.includes('already exists')) {
+                const refreshed = await eagleApi.folder.getAll();
+                const retry = refreshed.find(f => f.name === desiredName);
+                if (retry) {
+                  playlistFolderId = retry.id;
+                  folderName = retry.name;
+                  console.log(`Using folder after retry: "${folderName}" (ID: ${playlistFolderId})`);
+                }
+              } else {
+                throw createError;
               }
-            } else {
-              throw createError;
             }
           }
         }
+
         if (!playlistFolderId) {
-          console.error(`Failed to create or find folder: "${folderName}"`);
+          console.error(`Failed to create or find folder: "${desiredName}"`);
+        }
+
+        if (playlistDbId && playlistFolderId && (!playlistRecord || playlistRecord.eagle_folder_id !== playlistFolderId)) {
+          try {
+            await subscriptionDb.updatePlaylistFolderId(playlistDbId, playlistFolderId);
+            console.log(`[Importer] Updated playlist ${playlistDbId} with Eagle folder ID ${playlistFolderId}`);
+          } catch (updateErr) {
+            console.warn(`[Importer] Failed to persist folder ID ${playlistFolderId} for playlist ${playlistDbId}:`, updateErr);
+          }
         }
       } catch (err) {
         console.error("Error in folder operations:", err);
