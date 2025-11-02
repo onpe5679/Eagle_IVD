@@ -76,8 +76,19 @@ eagle.onPluginCreate(async (plugin) => {
     return;
   }
 
-  // 0. DB 먼저 초기화
-  await subscriptionDb.initDatabase(plugin.path);
+  // 0. 라이브러리 정보 확인 및 DB 초기화
+  let libraryInfo;
+  try {
+    libraryInfo = await eagleApi.getLibraryInfo();
+    if (!libraryInfo || !libraryInfo.path) {
+      throw new Error('라이브러리 경로를 확인할 수 없습니다.');
+    }
+    await subscriptionDb.initDatabase(libraryInfo.path);
+  } catch (error) {
+    console.error('Failed to initialize database for current library:', error);
+    uiController.showError(`데이터베이스를 초기화할 수 없습니다: ${error.message}`);
+    return;
+  }
   
   // 0.1. 데이터베이스 정리 (오래된 처리 락 해제)
   try {
@@ -87,30 +98,10 @@ eagle.onPluginCreate(async (plugin) => {
     console.error("[DB Cleanup] Failed to cleanup stale processing locks:", error);
   }
 
-  // 1. 라이브러리 정보 DB에 먼저 추가
-  let libId;
-  try {
-    const libInfo = await eagleApi.getLibraryInfo();
-    let lib = await subscriptionDb.getLibraryByName(libInfo.name);
-    if (!lib) {
-      libId = await subscriptionDb.addLibrary({
-        name: libInfo.name,
-        path: libInfo.path,
-        modificationTime: libInfo.modificationTime
-      });
-      await subscriptionDb.assignItemsToLibrary(libId);
-    } else {
-      libId = lib.id;
-    }
-  } catch (e) {
-    console.error('Failed to initialize libraries:', e);
-    libId = null;
-  }
-
   // 다운로드 관리자 초기화
   const downloadManager = new DownloadManager(plugin.path);
-  // 구독 관리자 초기화 (libraryId 전달)
-  const subscriptionManager = new EnhancedSubscriptionManager(plugin.path, libId);
+  // 구독 관리자 초기화
+  const subscriptionManager = new EnhancedSubscriptionManager(plugin.path);
   // 라이브러리 유지 관리 초기화
   const libraryMaintenance = new LibraryMaintenance(plugin.path);
   
@@ -138,19 +129,8 @@ eagle.onPluginCreate(async (plugin) => {
           uiController.showError('라이브러리 정보를 불러올 수 없습니다.');
           return;
         }
-        let lib = await subscriptionDb.getLibraryByName(libInfo.name);
-        let libId;
-        if (!lib) {
-          libId = await subscriptionDb.addLibrary({
-            name: libInfo.name,
-            path: libInfo.path,
-            modificationTime: libInfo.modificationTime
-          });
-          await subscriptionDb.assignItemsToLibrary(libId);
-        } else {
-          libId = lib.id;
-        }
-        subscriptionManager.libraryId = libId;
+        await subscriptionDb.initDatabase(libInfo.path);
+        await subscriptionManager.loadSubscriptions();
         // 구독목록 즉시 갱신
         if (window.loadSubscriptions) {
           await window.loadSubscriptions();
