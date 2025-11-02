@@ -68,6 +68,44 @@ class SubscriptionManager extends EventEmitter {
     return this.subscriptions;
   }
 
+  async ensurePlaylistFolder(folderName) {
+    const eagleApi = (typeof window !== 'undefined' && window.eagle)
+      ? window.eagle
+      : (typeof globalThis !== 'undefined' ? globalThis.eagle : undefined);
+
+    const targetName = (folderName && folderName.trim()) || 'Default Playlist';
+
+    if (!eagleApi || !eagleApi.folder) {
+      console.warn(`[SubscriptionManager] Eagle API is not available while ensuring folder "${targetName}"`);
+      return null;
+    }
+
+    try {
+      const allFolders = await eagleApi.folder.getAll();
+      const existing = allFolders.find(f => f.name === targetName);
+      if (existing) {
+        return existing.id;
+      }
+
+      try {
+        const created = await eagleApi.folder.create({ name: targetName });
+        return created?.id || null;
+      } catch (createError) {
+        if (createError?.message?.includes('already exists')) {
+          const refreshed = await eagleApi.folder.getAll();
+          const retry = refreshed.find(f => f.name === targetName);
+          if (retry) {
+            return retry.id;
+          }
+        }
+        throw createError;
+      }
+    } catch (error) {
+      console.error(`[SubscriptionManager] Failed to ensure folder "${targetName}":`, error);
+      return null;
+    }
+  }
+
   /**
    * 구독 목록 저장 (요약 필드만 업데이트)
    * - videos 카운트는 개별 임포트 완료 시 즉시 증가 처리됨
@@ -145,6 +183,8 @@ class SubscriptionManager extends EventEmitter {
     }
 
     // DB에 추가
+    const eagleFolderId = await this.ensurePlaylistFolder(newSub.folderName || newSub.title);
+
     const id = await subscriptionDb.addPlaylist({
       user_title: newSub.folderName || newSub.title,
       youtube_title: newSub.title,
@@ -154,9 +194,11 @@ class SubscriptionManager extends EventEmitter {
       format: newSub.format,
       quality: newSub.quality,
       auto_download: newSub.autoDownload,
-      skip: newSub.skip
+      skip: newSub.skip,
+      eagle_folder_id: eagleFolderId || null
     });
     newSub.id = id;
+    newSub.eagle_folder_id = eagleFolderId || null;
     this.subscriptions.push(newSub);
 
     console.log(`Subscribed to playlist: ${newSub.title} (${url})`);
@@ -274,8 +316,24 @@ class SubscriptionManager extends EventEmitter {
    * @param {object} videoMetadata - 개별 영상 메타데이터
    * @returns {Promise<void>}
    */
-  async importAndRemoveDownloadedFiles(folder, url, metadata, customFolderName, videoMetadata = {}) {
-    return await this.importer.importAndRemoveDownloadedFiles(folder, url, metadata, customFolderName, videoMetadata);
+  async importAndRemoveDownloadedFiles(
+    folder,
+    url,
+    metadata,
+    customFolderName,
+    videoMetadata = {},
+    expectedVideoIds = [],
+    playlistContext = {}
+  ) {
+    return await this.importer.importAndRemoveDownloadedFiles(
+      folder,
+      url,
+      metadata,
+      customFolderName,
+      videoMetadata,
+      expectedVideoIds,
+      playlistContext
+    );
   }
 
   /**

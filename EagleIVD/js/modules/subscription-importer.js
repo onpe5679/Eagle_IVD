@@ -34,8 +34,17 @@ class SubscriptionImporter extends EventEmitter {
    * @param {object} metadata - 플레이리스트 메타데이터
    * @param {string} customFolderName - 사용자 지정 폴더 이름
    * @param {object} videoMetadata - 각 비디오 ID별 메타데이터 매핑
+   * @param {string[]} expectedVideoIds - 현재 처리 중인 영상 ID 리스트
    */
-  async importAndRemoveDownloadedFiles(folder, url, metadata, customFolderName, videoMetadata = {}) {
+  async importAndRemoveDownloadedFiles(
+    folder,
+    url,
+    metadata,
+    customFolderName,
+    videoMetadata = {},
+    expectedVideoIds = [],
+    playlistContext = {}
+  ) {
     try {
       const files = await fs.readdir(folder);
       console.log("Files in directory:", files);
@@ -48,47 +57,122 @@ class SubscriptionImporter extends EventEmitter {
       ]);
 
       // 폴더명 결정: customFolderName 우선, 없으면 fallback
-      const folderName = customFolderName && customFolderName.trim() ? 
+      let folderName = customFolderName && customFolderName.trim() ?
         customFolderName : (metadata.playlist || this.getPlaylistId(url) || "Default Playlist");
 
+      const { playlistDbId = null, eagleFolderId: contextFolderId = null } = playlistContext || {};
+      let playlistFolderId = contextFolderId || metadata?.eagleFolderId || null;
+      let playlistRecord = null;
+
+      if (playlistDbId && !playlistFolderId) {
+        try {
+          playlistRecord = await subscriptionDb.getPlaylistById(playlistDbId);
+          if (playlistRecord?.eagle_folder_id) {
+            playlistFolderId = playlistRecord.eagle_folder_id;
+          }
+        } catch (dbErr) {
+          console.warn(`[Importer] Failed to load playlist record ${playlistDbId}:`, dbErr);
+        }
+      }
+
       // 기존 폴더 확인 또는 생성
-      let playlistFolderId = null;
-      console.log(`Looking for existing folder: "${folderName}"`);
       try {
-        const allFolders = await eagle.folder.getAll();
-        console.log(`Total folders: ${allFolders.length}`);
-        const exactMatch = allFolders.filter(f => f.name === folderName);
-        if (exactMatch.length > 0) {
-          playlistFolderId = exactMatch[0].id;
-          console.log(`Using existing folder: "${folderName}" (ID: ${playlistFolderId})`);
-        } else {
-          try {
-            const newFolder = await eagle.folder.create({ name: folderName });
-            playlistFolderId = newFolder.id;
-            console.log(`Created new folder: "${folderName}" (ID: ${playlistFolderId})`);
-          } catch (createError) {
-            if (createError.message.includes("already exists")) {
-              const updated = await eagle.folder.getAll();
-              const retry = updated.filter(f => f.name === folderName);
-              if (retry.length > 0) {
-                playlistFolderId = retry[0].id;
-                console.log(`Using newly found folder: "${folderName}" (ID: ${playlistFolderId})`);
+        const eagleApi = (typeof window !== 'undefined' && window.eagle)
+          ? window.eagle
+          : (typeof globalThis !== 'undefined' ? globalThis.eagle : undefined);
+
+        if (!eagleApi || !eagleApi.folder) {
+          throw new Error('Eagle API is not available while resolving playlist folder');
+        }
+
+        const allFolders = await eagleApi.folder.getAll();
+        console.log(`Looking for existing folder: id=${playlistFolderId || 'null'}, name="${folderName}"`);
+
+        if (playlistFolderId) {
+          const storedFolder = allFolders.find(f => f.id === playlistFolderId);
+          if (storedFolder) {
+            folderName = storedFolder.name;
+            console.log(`Using stored folder by ID: "${folderName}" (ID: ${playlistFolderId})`);
+          } else {
+            console.warn(`[Importer] Stored folder ID ${playlistFolderId} not found. Falling back to name search.`);
+            playlistFolderId = null;
+          }
+        }
+
+        const desiredName = (folderName && folderName.trim()) || 'Default Playlist';
+
+        if (!playlistFolderId) {
+          const existing = allFolders.find(f => f.name === desiredName);
+          if (existing) {
+            playlistFolderId = existing.id;
+            folderName = existing.name;
+            console.log(`Using existing folder by name: "${folderName}" (ID: ${playlistFolderId})`);
+          } else {
+            try {
+              const newFolder = await eagleApi.folder.create({ name: desiredName });
+              playlistFolderId = newFolder.id;
+              folderName = newFolder.name || desiredName;
+              console.log(`Created new folder: "${folderName}" (ID: ${playlistFolderId})`);
+            } catch (createError) {
+              if (createError?.message?.includes('already exists')) {
+                const refreshed = await eagleApi.folder.getAll();
+                const retry = refreshed.find(f => f.name === desiredName);
+                if (retry) {
+                  playlistFolderId = retry.id;
+                  folderName = retry.name;
+                  console.log(`Using folder after retry: "${folderName}" (ID: ${playlistFolderId})`);
+                }
+              } else {
+                throw createError;
               }
-            } else {
-              throw createError;
             }
           }
         }
+
         if (!playlistFolderId) {
-          console.error(`Failed to create or find folder: "${folderName}"`);
+          console.error(`Failed to create or find folder: "${desiredName}"`);
+        }
+
+        if (playlistDbId && playlistFolderId && (!playlistRecord || playlistRecord.eagle_folder_id !== playlistFolderId)) {
+          try {
+            await subscriptionDb.updatePlaylistFolderId(playlistDbId, playlistFolderId);
+            console.log(`[Importer] Updated playlist ${playlistDbId} with Eagle folder ID ${playlistFolderId}`);
+          } catch (updateErr) {
+            console.warn(`[Importer] Failed to persist folder ID ${playlistFolderId} for playlist ${playlistDbId}:`, updateErr);
+          }
         }
       } catch (err) {
         console.error("Error in folder operations:", err);
         throw err;
       }
 
+      const shouldFilterByIds = Array.isArray(expectedVideoIds) && expectedVideoIds.length > 0;
+      const allowedIds = shouldFilterByIds ? new Set(expectedVideoIds.filter(Boolean)) : null;
+      const processedIds = new Set();
+
+      const normalizeText = (text = '') =>
+        text
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/gi, ' ')
+          .trim();
+
+      const expectedBasenames = new Map();
+      if (shouldFilterByIds && allowedIds) {
+        for (const id of allowedIds) {
+          const meta = videoMetadata?.[id];
+          if (meta?.title) {
+            expectedBasenames.set(id, normalizeText(meta.title));
+          }
+        }
+      }
+
       // 파일 추가 및 삭제
       for (const file of files) {
+        if (shouldFilterByIds && allowedIds && processedIds.size >= allowedIds.size) {
+          console.log('✅ All expected videos processed, skipping remaining files.');
+          break;
+        }
+
         // 임시 파일들과 텍스트 파일 스킵 (더 강화된 필터링)
         if (file.endsWith(".part") ||
             file.endsWith(".ytdl") ||
@@ -105,51 +189,69 @@ class SubscriptionImporter extends EventEmitter {
         
         const filePath = path.join(folder, file);
         try {
+          let videoId = null;
+          let currentMeta = metadata; // 기본값으로 일반 메타데이터 사용
+
+          const baseNameWithoutExt = file.replace(/\.[^.]+$/, '');
+          const normalizedFileName = normalizeText(baseNameWithoutExt);
+
+          if (shouldFilterByIds && allowedIds) {
+            for (const id of allowedIds) {
+              if (!id) continue;
+              const normalizedExpected = expectedBasenames.get(id);
+              const expectedSnippet = normalizedExpected && normalizedExpected.length >= 5
+                ? normalizedExpected
+                : null;
+              if (file.includes(id) || (expectedSnippet && normalizedFileName.includes(expectedSnippet))) {
+                videoId = id;
+                break;
+              }
+            }
+
+            if (!videoId) {
+              console.log(`🚫 Skipping file not in expected allowlist: ${file}`);
+              continue;
+            }
+
+            if (videoMetadata && videoMetadata[videoId]) {
+              currentMeta = videoMetadata[videoId];
+            }
+          } else {
+            // videoMetadata에서 파일명과 매칭되는 영상 찾기 (기존 동작 유지)
+            for (const [id, meta] of Object.entries(videoMetadata || {})) {
+              const normalizedTitle = normalizeText(meta.title || '');
+              const titleSnippet = normalizedTitle && normalizedTitle.length >= 5
+                ? normalizedTitle
+                : null;
+
+              if (!id && !titleSnippet) continue;
+
+              if ((id && file.includes(id)) || (titleSnippet && normalizedFileName.includes(titleSnippet))) {
+                videoId = id;
+                currentMeta = meta;
+                console.log(`✅ Found video metadata for "${file}": ${meta.title} (${id})`);
+                break;
+              }
+            }
+
+            if (!videoId) {
+              console.warn(`⚠️ Could not determine video ID for: ${file}`);
+            }
+          }
+
           const stats = await fs.stat(filePath);
           if (!stats.isFile()) continue;
-          
+
           // 파일 크기가 너무 작으면 스킵 (1KB 미만)
           if (stats.size < 1024) {
             console.log(`Skipping too small file: ${file} (${stats.size} bytes)`);
-            await fs.unlink(filePath);
             continue;
           }
-          // 파일 이름에서 영상 정보 추출 (ID prefix 제거됨)
-          let videoId = null;
-          let currentMeta = metadata; // 기본값으로 일반 메타데이터 사용
-          
-          // videoMetadata에서 파일명과 매칭되는 영상 찾기
-          for (const [id, meta] of Object.entries(videoMetadata || {})) {
-            // 파일명이 영상 제목과 매칭되는지 확인
-            const cleanTitle = (meta.title || '').replace(/[^\w\s-]/g, '').trim();
-            const cleanFileName = file.replace(/\.[^.]+$/, '').replace(/[^\w\s-]/g, '').trim();
-            
-            if (cleanFileName.includes(cleanTitle.substring(0, Math.min(20, cleanTitle.length))) || 
-                cleanFileName.includes(id)) {
-              videoId = id;
-              currentMeta = meta;
-              console.log(`✅ Found video metadata for "${file}": ${meta.title} (${id})`);
-              break;
-            }
-          }
-          
-          // videoId를 찾지 못한 경우 URL에서 추출 시도  
-          if (!videoId) {
-            const urlMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-            videoId = urlMatch ? urlMatch[1] : null;
-            
-            if (videoId && videoMetadata && videoMetadata[videoId]) {
-              currentMeta = videoMetadata[videoId];
-              console.log(`✅ Found video metadata from URL for "${file}": ${currentMeta.title} (${videoId})`);
-            } else {
-              console.warn(`⚠️ Could not find individual video metadata for: ${file}`);
-            }
-          }
-          
+
           // 파일 제목 처리 (ID prefix 제거 불필요)
           let title = path.basename(file, path.extname(file));
           let displayName = title;
-          
+
           // 업로드 날짜 prefix 추가 (개별 영상의 날짜 사용)
           if (this.prefixUploadDate && currentMeta.upload_date) {
             displayName = `${currentMeta.upload_date} ${title}`;
@@ -179,6 +281,8 @@ Video ID: ${videoId || 'Unknown'}`,
             videoTitle: currentMeta.title,
             uploader: currentMeta.uploader
           });
+          let importedSuccessfully = false;
+
           try {
             const item = await withTimeout(eagle.item.addFromPath(filePath, fileMeta));
             console.log(`Added ${file} to Eagle`, item);
@@ -194,6 +298,7 @@ Video ID: ${videoId || 'Unknown'}`,
             } catch (dbError) {
               console.error(`[DB Update] Failed to mark video ${videoId} as eagle_linked:`, dbError);
             }
+            importedSuccessfully = true;
           } catch (addErr) {
             if (addErr.message === 'Import timeout') {
               console.error(`Import timeout for ${file}, skipping file.`);
@@ -224,6 +329,7 @@ Video ID: ${videoId || 'Unknown'}`,
                   } catch (dbError) {
                     console.error(`[DB Update] Failed to mark existing video ${videoId} as eagle_linked:`, dbError);
                   }
+                  importedSuccessfully = true;
                 } else {
                   console.warn(`No existing item found for URL: ${searchURL}`);
                 }
@@ -234,8 +340,15 @@ Video ID: ${videoId || 'Unknown'}`,
               console.error(`Error adding file ${file}:`, addErr);
             }
           }
-          await fs.unlink(filePath);
-          console.log(`Removed ${file} from downloads`);
+          if (importedSuccessfully) {
+            await fs.unlink(filePath);
+            console.log(`Removed ${file} from downloads`);
+            if (shouldFilterByIds && allowedIds && videoId) {
+              processedIds.add(videoId);
+            }
+          } else {
+            console.log(`Keeping file for retry: ${file}`);
+          }
         } catch (fileErr) {
           console.error(`Error processing file ${file}:`, fileErr);
         }

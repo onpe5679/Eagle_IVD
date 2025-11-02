@@ -58,9 +58,15 @@ async function initDatabase(libraryPath) {
       first_created DATETIME DEFAULT CURRENT_TIMESTAMP,
       last_checked DATETIME,
       auto_download INTEGER DEFAULT 0,
-      skip INTEGER DEFAULT 0
+      skip INTEGER DEFAULT 0,
+      eagle_folder_id TEXT
     );
   `);
+
+  const playlistCols = await db.all("PRAGMA table_info(playlists);");
+  if (!playlistCols.some(col => col.name === "eagle_folder_id")) {
+    await db.exec("ALTER TABLE playlists ADD COLUMN eagle_folder_id TEXT;");
+  }
 
   // videos 테이블
   await db.exec(`
@@ -171,6 +177,10 @@ async function getPlaylistByUrl(url) {
   return await db.get('SELECT * FROM playlists WHERE url = ?', url);
 }
 
+async function getPlaylistById(id) {
+  return await db.get('SELECT * FROM playlists WHERE id = ?', id);
+}
+
 /**
  * 새 플레이리스트 추가
  * @param {object} p - playlist 객체
@@ -178,10 +188,11 @@ async function getPlaylistByUrl(url) {
 async function addPlaylist(p) {
   return await withTransaction(async (db) => {
     const stmt = await db.run(
-      `INSERT INTO playlists (user_title, youtube_title, videos_from_yt, videos, url, format, quality, auto_download, skip)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO playlists (user_title, youtube_title, videos_from_yt, videos, url, format, quality, auto_download, skip, eagle_folder_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       p.user_title, p.youtube_title, p.videos_from_yt, p.videos, p.url,
-      p.format, p.quality, p.auto_download ? 1 : 0, p.skip ? 1 : 0
+      p.format, p.quality, p.auto_download ? 1 : 0, p.skip ? 1 : 0,
+      p.eagle_folder_id || null
     );
     return stmt.lastID;
   });
@@ -200,6 +211,13 @@ async function updatePlaylist(id, fields) {
       ...values
     );
   });
+}
+
+async function updatePlaylistFolderId(id, folderId) {
+  if (folderId === undefined) {
+    return;
+  }
+  return updatePlaylist(id, { eagle_folder_id: folderId });
 }
 
 /**
@@ -513,9 +531,11 @@ async function updatePlaylistSummary(id, { last_checked, videos_from_yt } = {}) 
 module.exports = {
   initDatabase,
   getAllPlaylists,
+  getPlaylistById,
   getPlaylistByUrl,
   addPlaylist,
   updatePlaylist,
+  updatePlaylistFolderId,
   deletePlaylist,
   getVideosByPlaylist,
   addVideo,
