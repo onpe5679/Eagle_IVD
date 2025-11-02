@@ -90,14 +90,15 @@ class SubscriptionImporter extends EventEmitter {
       // 파일 추가 및 삭제
       for (const file of files) {
         // 임시 파일들과 텍스트 파일 스킵 (더 강화된 필터링)
-        if (file.endsWith(".part") || 
-            file.endsWith(".ytdl") || 
+        if (file.endsWith(".part") ||
+            file.endsWith(".ytdl") ||
             file.endsWith(".txt") ||
             file.endsWith(".tmp") ||
             file.endsWith(".downloading") ||
             file.includes(".part") ||
             file.includes(".temp") ||
-            file.startsWith(".")) {
+            file.startsWith(".") ||
+            /\.f\d{3,4}\./i.test(file)) {
           console.log("Skipping temporary/non-video file:", file);
           continue;
         }
