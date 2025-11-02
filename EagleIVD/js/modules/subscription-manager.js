@@ -77,62 +77,40 @@ class SubscriptionManager extends EventEmitter {
   }
 
   /**
-   * 구독 목록 저장
+   * 구독 목록 저장 (요약 필드만 업데이트)
+   * - videos 카운트는 개별 임포트 완료 시 즉시 증가 처리됨
+   * - 여기서는 last_checked, videos_from_yt만 갱신
    * @param {Array} [results=[]] - checkAllSubscriptions 결과 배열
    * @returns {Promise<void>}
    */
   async saveSubscriptions(results = []) {
     // 결과를 구독 ID 기준으로 쉽게 찾기 위한 Map 생성
     const resultMap = new Map();
-    if (results && Array.isArray(results)) {
-        results.forEach(r => {
-            if (r && r.subscription && r.subscription.id) {
-                resultMap.set(r.subscription.id, r);
-            }
-        });
+    if (Array.isArray(results)) {
+      for (const r of results) {
+        if (r && r.subscription && r.subscription.id) {
+          resultMap.set(r.subscription.id, r);
+        }
+      }
     }
 
     for (const sub of this.subscriptions) {
-        const result = resultMap.get(sub.id);
-        const updateData = {
-            youtube_title: sub.youtube_title, // DB에서 로드된 값 사용 또는 result에서 가져올 수도 있음
-            auto_download: sub.auto_download, // DB에서 로드된 값 사용
-            skip: sub.skip // DB에서 로드된 값 사용
-        };
+      const result = resultMap.get(sub.id);
+      if (result && result.subscription) {
+        const last_checked = result.subscription.lastCheck || new Date().toISOString();
+        const videos_from_yt = (result.stats && result.stats.totalVideosFound !== undefined)
+          ? result.stats.totalVideosFound
+          : sub.videos_from_yt;
 
-        // DB에서 현재 플레이리스트의 실제 비디오 개수 조회
         try {
-            const videosInDb = await subscriptionDb.getVideosByPlaylist(sub.id);
-            updateData.videos = videosInDb.length;
-            console.log(`[SaveSubs] Playlist ${sub.id}: Found ${updateData.videos} videos in DB.`);
-        } catch (dbError) {
-            console.error(`[SaveSubs] Failed to get video count for playlist ${sub.id}:`, dbError);
-            updateData.videos = sub.videos; // 에러 시 DB에서 로드된 값 유지
-        }
-
-        if (result && result.subscription) {
-            // checkSubscription에서 lastCheck를 설정했으므로 result에서 가져옴
-            updateData.last_checked = result.subscription.lastCheck || new Date().toISOString();
-            if (result.stats && result.stats.totalVideosFound !== undefined) {
-                updateData.videos_from_yt = result.stats.totalVideosFound;
-            } else {
-                updateData.videos_from_yt = sub.videos_from_yt; // 확인 결과에 없으면 DB값 유지
-            }
-             // 제목 업데이트 (선택 사항 - checkSubscription 결과에 playlistMetadata가 있다면 사용 가능)
-             // const playlistTitleFromResult = result.subscription.title; // checker가 title을 업데이트했다면
-             // if (playlistTitleFromResult) updateData.youtube_title = playlistTitleFromResult;
-        } else {
-            // 확인 결과가 없는 경우 (예: 확인 중단) 기존 값 유지
-            updateData.last_checked = sub.last_checked;
-            updateData.videos_from_yt = sub.videos_from_yt;
-        }
-
-        // console.log(`[SaveSubs] Updating playlist ${sub.id} with:`, updateData);
-        try {
-            await subscriptionDb.updatePlaylist(sub.id, updateData);
+          await subscriptionDb.updatePlaylistSummary(sub.id, { last_checked, videos_from_yt });
+          console.log(`[SaveSubs] Summary updated for playlist ${sub.id} (last_checked, videos_from_yt)`);
         } catch (updateError) {
-            console.error(`[SaveSubs] Failed to update playlist ${sub.id}:`, updateError, updateData);
+          console.error(`[SaveSubs] Failed to update summary for playlist ${sub.id}:`, updateError);
         }
+      } else {
+        // 결과가 없으면 요약 업데이트 생략 (기존 값 유지)
+      }
     }
   }
 
@@ -500,4 +478,4 @@ class EnhancedSubscriptionManager extends SubscriptionManager {
 module.exports = {
   SubscriptionManager,
   EnhancedSubscriptionManager
-}; 
+};

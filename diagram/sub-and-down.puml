@@ -1,141 +1,204 @@
 @startuml
 skinparam sequenceArrowThickness 2
+skinparam ParticipantPadding 10
+skinparam BoxPadding 10
 
-title 구독 추가 및 영상 다운로드 프로세스 상세 다이어그램
+title 구독 확인/다운로드/임포트 - 단순화된 실제 흐름 (중복 Phase 제거 + 실시간 DB 반영)
 
 actor 사용자
 participant "클라이언트 UI" as UI
 participant "SubscriptionManager" as SubManager
+participant "SubscriptionChecker" as Checker
 participant "DownloadManager" as DLManager
-participant "Eagle Library" as Eagle
+participant "VideoDownloadQueue" as Queue
+participant "SubscriptionImporter" as Importer
 participant "yt-dlp 프로세스" as ytdlp
 participant "YouTube 서버" as YouTube
+participant "구독 DB" as DB
 participant "파일 시스템" as FS
-participant "구독 DB (JSON)" as DB
+participant "Eagle Library" as Eagle
 
-== 구독 추가 프로세스 ==
-사용자 -> UI: 구독 추가 버튼 클릭
+== 사전 구성 ==
+note over SubManager,DLManager
+SubManager.setDownloadManager(downloadManager)
+- this.downloadManager = downloadManager
+- this.checker = new SubscriptionChecker(downloadManager, updateStatusUI, importer, libraryId)
+
+DLManager.initialize()
+- downloadFolder 생성
+- downloadQueue = new VideoDownloadQueue(DLManager)
+- Queue 이벤트를 DLManager가 UI로 중계
+
+Importer = new SubscriptionImporter(updateStatusUI, prefixUploadDate)
+end note
+
+== 구독 추가 (변경 없음) ==
+사용자 -> UI: "구독 추가" 클릭
 activate UI
-
-UI -> UI: 구독 정보 입력 폼 표시
-사용자 -> UI: URL, 폴더명, 형식, 품질 입력
-UI -> SubManager: addSubscription(url, folderName, format, quality)
+UI -> SubManager: addSubscription({ url, folderName, format, quality })
 activate SubManager
+SubManager -> DLManager: getMetadata(url)
+activate DLManager
+DLManager -> ytdlp: --print-json --skip-download --flat-playlist --playlist-end 1 url
+activate ytdlp
+ytdlp -> YouTube: 메타데이터 요청
+activate YouTube
+YouTube --> ytdlp: JSON 메타데이터
+deactivate YouTube
+ytdlp --> DLManager: JSON
+deactivate ytdlp
+DLManager --> SubManager: 메타데이터 객체
+deactivate DLManager
 
-note over SubManager: 중복 구독 확인\nthis.subscriptions.find(s => s.url === url)
-
-alt 이미 구독 중
-    SubManager --> UI: throw Error("Already subscribed to that URL")
-    UI --> 사용자: "이미 구독 중인 URL입니다" 오류 표시
-else 신규 구독
-    SubManager -> DLManager: getMetadata(url)
-    activate DLManager
-    
-    DLManager -> ytdlp: ytdlp --print-json --skip-download url
-    activate ytdlp
-    ytdlp -> YouTube: 메타데이터 요청
-    activate YouTube
-    YouTube --> ytdlp: 메타데이터 반환
-    deactivate YouTube
-    ytdlp --> DLManager: JSON 메타데이터
-    deactivate ytdlp
-    
-    DLManager --> SubManager: 메타데이터 객체 (title, entries 등)
-    deactivate DLManager
-    
-    SubManager -> SubManager: 구독 정보 생성 및 videoIds 추출
-    SubManager -> DB: saveSubscriptions() - JSON 파일로 저장
-    SubManager -> UI: emit('subscriptionAdded', newSub)
-    UI --> 사용자: "구독이 추가되었습니다" 메시지 표시
-end
-deactivate SubManager
-
-== 새 영상 확인 및 다운로드 프로세스 ==
-사용자 -> UI: "새 비디오 확인" 버튼 클릭
-activate UI
-UI -> SubManager: checkAllSubscriptions(progressCallback, concurrency=3)
-activate SubManager
-
-note over SubManager: 작업 상태 초기화\nthis.isChecking = true
-
-SubManager -> SubManager: 구독 목록 배열 복사 ([...this.subscriptions])
-SubManager -> SubManager: processInBatches(subs, concurrency=3)
-
-loop 배치 처리 (최대 3개 구독 동시 처리)
-    group 구독 체크 프로세스
-        SubManager -> SubManager: checkSubscription(sub, current, total)
-        activate SubManager
-        
-        SubManager -> ytdlp: Phase 1 - 경량화된 재생목록 메타데이터 요청\n--skip-download --flat-playlist --print-json
-        activate ytdlp
-        ytdlp -> YouTube: 재생목록 메타데이터 요청
-        YouTube --> ytdlp: 경량화된 메타데이터
-        ytdlp --> SubManager: 비디오 ID 목록
-        deactivate ytdlp
-        
-        SubManager -> SubManager: 신규 비디오 ID 필터링\nvideoIdSet = new Set(sub.videoIds)\nnewIds = fetchedIds.filter(id => !videoIdSet.has(id))
-        
-        alt 신규 영상 없음
-            SubManager -> UI: updateStatusUI("신규 영상 없음")
-        else 신규 영상 있음
-            SubManager -> FS: 임시 폴더 생성 (subscription_playlistId)
-            
-            loop 상세 메타데이터 수집 (배치 크기=30)
-                SubManager -> ytdlp: Phase 2 - 상세 메타데이터 요청\n--skip-download --print-json
-                activate ytdlp
-                ytdlp -> YouTube: 상세 메타데이터 요청
-                YouTube --> ytdlp: 상세 메타데이터
-                ytdlp --> SubManager: 상세 메타데이터 JSON
-                deactivate ytdlp
-                SubManager -> SubManager: 메타데이터 저장
-            end
-            
-            loop 비디오 다운로드 (배치 크기=5)
-                SubManager -> UI: updateStatusUI("다운로드 중...")
-                SubManager -> ytdlp: Phase 3 - 비디오 다운로드\n--no-skip-download --format {format}
-                activate ytdlp
-                ytdlp -> YouTube: 비디오 스트림 요청
-                YouTube --> ytdlp: 비디오 스트림
-                ytdlp -> FS: 임시 폴더에 파일 저장
-                ytdlp --> SubManager: 다운로드 진행률
-                deactivate ytdlp
-            end
-            
-            SubManager -> SubManager: importAndRemoveDownloadedFiles(ids, tempFolder)
-            activate SubManager
-            
-            SubManager -> Eagle: folder.getAll()
-            Eagle --> SubManager: 폴더 목록
-            
-            alt 매칭되는 폴더 존재
-                SubManager -> Eagle: folder.get({name: folderName})
-            else
-                SubManager -> Eagle: folder.create({name: folderName})
-            end
-            
-            loop 각 다운로드 파일
-                SubManager -> Eagle: isDuplicate(videoUrl, videoId)
-                alt 중복 아님
-                    SubManager -> Eagle: item.addFromPath(filePath, metadata)
-                else
-                    SubManager -> Eagle: item.get({website: searchURL})
-                    SubManager -> Eagle: item.modify(itemId, {folders: newFolders})
-                end
-                SubManager -> FS: fs.unlink(filePath) - 임시 파일 삭제
-            end
-            
-            SubManager -> FS: fs.rm(tempFolder, {recursive: true})
-            deactivate SubManager
-        end
-        deactivate SubManager
-    end
-end
-
-SubManager -> SubManager: this.isChecking = false
-SubManager -> UI: emit('checkComplete')
-UI --> 사용자: 작업 완료 메시지 표시
-
+SubManager -> DB: addPlaylist({...})
+DB --> SubManager: playlist.id
+SubManager -> SubManager: this.subscriptions.push(newSub)
+SubManager --> UI: emit('subscriptionAdded', newSub)
+UI --> 사용자: "구독이 추가되었습니다"
 deactivate SubManager
 deactivate UI
 
-@enduml 
+== 새 영상 확인/다운로드/임포트 (단순화된 파이프라인) ==
+사용자 -> UI: "새 비디오 확인" 클릭
+activate UI
+UI -> SubManager: checkAllSubscriptions(progressCallback, {concurrency, metadataBatchSize, downloadBatchSize, rateLimit, enableSorting})
+activate SubManager
+
+SubManager -> SubManager: loadSubscriptions()
+SubManager -> DB: getPlaylistsByLibrary(libraryId) 또는 getAllPlaylists()
+DB --> SubManager: 구독 목록
+SubManager -> Checker: checkAllSubscriptions(subscriptions, progressCallback, options)
+activate Checker
+
+note over Checker
+isChecking = true
+- 단일 Phase A에서 각 구독의 ID 목록과 DB 상태를 함께 수집
+- 이후 정렬(옵션) 및 배치(concurrency) 처리
+end note
+
+group Phase A: "ID 수집 + DB 비교" (한 번만)
+  loop 모든 구독 (병렬)
+    Checker -> ytdlp: --skip-download --flat-playlist --print-json
+    activate ytdlp
+    ytdlp -> YouTube: 엔트리/ID 요청
+    YouTube --> ytdlp: JSON 라인 스트림
+    ytdlp --> Checker: fetchedIds
+    deactivate ytdlp
+
+    Checker -> DB: getCompletedVideoIds(sub.id)  // downloaded=1 AND eagle_linked=1
+    DB --> Checker: completedSet
+    Checker -> Checker: newVideoIds = fetchedIds - completedSet
+    Checker -> Checker: newVideoCount = newVideoIds.length
+    note right
+    이후 checkSubscription 호출 시
+    preFetchedIds로 reuse → 재요청 최소화
+    end note
+  end
+  alt enableSorting != false
+    Checker -> Checker: newVideoCount 오름차순 정렬 (빠른 피드백/안정성)
+  else
+    Checker -> Checker: 원래 순서(FIFO) 처리
+  end
+end
+
+loop 배치 처리 (concurrency 동시)
+  group 각 구독 처리 (checkSubscription)
+    activate Checker
+
+    alt newVideoIds 비어있음
+      Checker -> UI: updateStatusUI("신규 영상 없음")
+      Checker --> SubManager: {newVideos:0, stats.totalVideosFound=fetchedIds.length}
+      deactivate Checker
+    else
+      group Phase B: 새 영상 상세 메타데이터 (배치 = metadataBatchSize)
+        loop 배치
+          Checker -> ytdlp: --skip-download --print-json --newline (배치 URL들)
+          activate ytdlp
+          ytdlp -> YouTube: 상세 메타데이터 요청
+          YouTube --> ytdlp: 상세 JSON 라인 스트림
+          ytdlp --> Checker: downloadedMetadata[id] 갱신
+          deactivate ytdlp
+        end
+      end
+
+      group Phase C: 큐 다운로드 + 즉시 임포트 + 실시간 DB 반영
+        Checker -> DLManager: applyUISettings()  // 동시 다운로드/속도제한 UI값 적용
+        Checker -> DLManager: downloadQueue.setImporter(Importer)
+        opt rateLimit > 0
+          Checker -> DLManager: downloadQueue.setRateLimit(rateLimit)
+        end
+
+        Checker -> Checker: playlistInfo = {id(playlistId), playlistDbId=sub.id, ...}
+
+        loop newVideoIds
+          Checker -> DLManager: downloadQueue.queue.push(new VideoDownloadItem(metadata, playlistInfo))
+          DLManager -> DLManager: downloadQueue.stats.total++
+        end
+
+        alt Queue 미실행
+          Checker -> DLManager: downloadQueue.setMaxConcurrent(downloadBatchSize) + start()
+          activate Queue
+          DLManager -> UI: "Download queue started"
+        end
+
+        note over Queue,DLManager
+        Queue.processQueue()가 VideoDownloadItem 단위로 yt-dlp를 병렬 실행
+        videoCompleted / videoFailed 이벤트 발생
+        end note
+
+        loop 각 영상 완료 이벤트
+          Queue -> DLManager: videoCompleted(videoItem)
+          DLManager -> Checker: 이벤트 전달
+          ... (내부 처리) ...
+          DLManager -> DB: markVideoDownloadComplete(videoId,'completed')
+          DLManager -> Importer: importAndRemoveDownloadedFiles(...)
+          Importer -> Eagle: folder.getAll / create / item.addFromPath or update(save)
+          Importer -> DB: markVideoAsEagleLinked(videoId)
+          Importer -> FS: fs.unlink(file)  // 다운로드 파일 삭제
+          DLManager -> DB: incrementPlaylistVideos(playlistDbId, +1)  // videos 즉시 증가
+        end
+
+        loop 각 영상 실패 이벤트
+          Queue -> DLManager: videoFailed(videoItem)
+          DLManager -> DB: markVideoDownloadComplete(videoId,'failed', reason)
+          DLManager -> DB: releaseVideoProcessingLock(videoId) (필요 시)
+        end
+      end
+
+      group Phase D: 구독 요약 업데이트 (간소화)
+        Checker -> Checker: sub.lastCheck = Date.now()
+        Checker --> SubManager: { stats.totalVideosFound=fetchedIds.length, ... }
+        SubManager -> DB: updatePlaylistSummary(sub.id, { last_checked, videos_from_yt })
+        DB --> SubManager: OK
+      end
+      deactivate Checker
+    end
+  end
+end
+
+Checker -> Checker: isChecking = false
+Checker --> SubManager: results[]
+deactivate Checker
+
+== 마무리 ==
+SubManager -> SubManager: saveSubscriptions(results)
+note right of SubManager
+- videos는 이미 per-video 임포트 완료 시 즉시 증가 처리됨
+- 여기서는 last_checked, videos_from_yt만 갱신
+end note
+SubManager --> UI: emit('checkComplete')
+UI --> 사용자: "작업 완료"
+deactivate SubManager
+deactivate UI
+
+== 메모 ==
+note over Checker,DLManager
+- Phase A에서 수집한 fetchedIds는 checkSubscription에서 preFetchedIds로 재사용하여 재요청 최소화
+- enableSorting 옵션으로 정렬 비활성화 가능(FIFO)
+- 실시간 DB 반영:
+  • 영상 성공 시: downloaded=1 + eagle_linked=1(임포트 후) + playlists.videos += 1
+  • 실패 시: status=failed + 처리락 해제
+- 일괄 갱신(saveSubscriptions)은 요약 필드만 업데이트
+end note
+
+@enduml

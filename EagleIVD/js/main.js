@@ -10,6 +10,17 @@ const settings = require('../js/modules/settings.js');
 console.log("DB모듈 로드 성공");
 console.log("Settings 모듈 로드 성공");
 
+// Random User-Agent 리스트 및 선택 함수
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.96 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.5790.102 Safari/537.36'
+];
+
+function getRandomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
 // 필요한 모듈 동적 로딩
 function loadModules() {
   try {
@@ -67,6 +78,14 @@ eagle.onPluginCreate(async (plugin) => {
 
   // 0. DB 먼저 초기화
   await subscriptionDb.initDatabase(plugin.path);
+  
+  // 0.1. 데이터베이스 정리 (오래된 처리 락 해제)
+  try {
+    await subscriptionDb.cleanupStaleProcessingLocks(2); // 2시간 이상 오래된 락 해제
+    console.log("[DB Cleanup] Stale processing locks cleaned up on startup");
+  } catch (error) {
+    console.error("[DB Cleanup] Failed to cleanup stale processing locks:", error);
+  }
 
   // 1. 라이브러리 정보 DB에 먼저 추가
   let libId;
@@ -172,7 +191,7 @@ eagle.onPluginCreate(async (plugin) => {
     uiController.appendLog("[CMD] " + command);
   };
   
-  // 단일 비디오 다운로드 함수
+  // 단일 비디오 다운로드 함수 (새로운 큐 시스템 사용)
   window.handleDownload = async (
     url,
     format,
@@ -182,24 +201,42 @@ eagle.onPluginCreate(async (plugin) => {
   ) => {
     try {
       console.log("Handling download for single URL:", url);
-      const metadata = await downloadManager.getMetadata(url);
-      console.log("Metadata fetched:", metadata);
+      
+      // UI 설정값 적용 (속도 제한, 동시 다운로드 수)
+      downloadManager.applyUISettings();
+      
+      // Eagle 임포트를 위한 importer 설정
+      if (subscriptionManager && subscriptionManager.importer && downloadManager.downloadQueue) {
+        downloadManager.downloadQueue.setImporter(subscriptionManager.importer);
+      }
+      
+      // 현재 설정값 읽기
+      const sourceAddress = document.getElementById('sourceAddressSelect')?.value || '';
+      const randomUa = document.getElementById('randomUaChk')?.checked || false;
+      const cookieFile = document.getElementById('cookieFileInput')?.value || '';
+      const rateLimit = parseInt(document.getElementById('rateLimit')?.value) || 0;
+      
+      // 속도 제한 적용 (UI 파라미터보다 UI 설정 우선)
+      if (rateLimit > 0 && downloadManager.downloadQueue) {
+        downloadManager.downloadQueue.setRateLimit(rateLimit);
+      } else if (speedLimit && downloadManager.downloadQueue) {
+        downloadManager.downloadQueue.setRateLimit(speedLimit);
+      }
+      
+      const options = {
+        folderName: 'Single Videos',
+        sourceAddress: sourceAddress,
+        userAgent: randomUa ? getRandomUserAgent() : '',
+        cookieFile: cookieFile,
+        maxConcurrent: concurrency || parseInt(document.getElementById('downloadBatchSize')?.value) || 3
+      };
 
-      await downloadManager.startDownload(
-        url,
-        format,
-        quality,
-        speedLimit,
-        concurrency
-      );
-      console.log("Download complete!");
+      // 새로운 큐 기반 다운로드 시작
+      const result = await downloadManager.startVideoDownload(url, format, quality, options);
+      console.log("Download complete!", result);
       uiController.updateStatusUI("Download complete!");
 
-      await subscriptionManager.importAndRemoveDownloadedFiles(
-        downloadManager.downloadFolder,
-        url,
-        metadata
-      );
+      // Eagle 임포트는 큐 시스템에서 자동으로 처리됨
     } catch (error) {
       console.error("Download failed:", error);
       uiController.showError(`Download failed: ${error.message}`);

@@ -3,35 +3,51 @@
  * 사용자 인터페이스 관련 함수들
  */
 
-/**
- * UI 상태 업데이트
- * @param {string} message - 상태 메시지
- */
-function updateStatusUI(message) {
-  console.log("Status update:", message);
-  // 상태 업데이트를 직접 처리합니다 (순환 호출 방지)
-  const statusArea = document.getElementById("statusArea");
-  if (statusArea) {
-    statusArea.textContent = message;
-  }
-}
+// 대량 처리 최적화를 위한 전역 변수들
+let uiScrollTimeout = null;
+let uiLogQueue = [];
+let uiLogTimeout = null;
 
 /**
- * 명령어 미리보기 업데이트
- * @param {string} command - 명령어 문자열
+ * 상태 메시지 업데이트 (대량 처리 최적화)
+ * @param {string} message - 표시할 메시지
+ * @param {boolean} append - 기존 메시지에 추가할지 여부
  */
-function updateCommandPreview(command) {
-  console.log("Command preview:", command);
-  // 직접 DOM 요소 업데이트 (순환 호출 방지)
-  const commandPreview = document.getElementById("commandPreview");
-  const commandPreviewArea = document.getElementById("commandPreviewArea");
+function updateStatusUI(message, append = false) {
+  console.log("Status update:", message);
   
-  if (commandPreview) {
-    commandPreview.textContent = command;
+  const statusArea = document.getElementById("statusArea");
+  if (statusArea) {
+    if (append) {
+      statusArea.textContent += "\n" + message;
+    } else {
+      statusArea.textContent = message;
+    }
+    
+    // 대량 처리 시 스크롤 최적화 (debounce)
+    if (!uiScrollTimeout) {
+      uiScrollTimeout = setTimeout(() => {
+        statusArea.scrollTop = statusArea.scrollHeight;
+        uiScrollTimeout = null;
+      }, 100); // 100ms 간격으로 스크롤 업데이트
+    }
   }
   
-  if (commandPreviewArea) {
-    commandPreviewArea.classList.remove("hidden");
+  // 대량 로그 시 성능 최적화
+  uiLogQueue.push(message);
+  
+  if (!uiLogTimeout) {
+    uiLogTimeout = setTimeout(() => {
+      // 최대 50개까지만 유지 (성능 보호)
+      const logsToProcess = uiLogQueue.splice(0, 50);
+      logsToProcess.forEach(msg => appendLog(msg));
+      uiLogTimeout = null;
+      
+      // 남은 로그가 있으면 계속 처리
+      if (uiLogQueue.length > 0) {
+        updateStatusUI('', false);
+      }
+    }, 50); // 50ms 배치 처리
   }
 }
 
@@ -211,6 +227,28 @@ function updateYoutubePreviewUI(thumbnailUrl, title) {
 }
 
 /**
+ * 명령어 미리보기 업데이트
+ * @param {string} command - 표시할 명령어
+ */
+function updateCommandPreview(command) {
+  console.log("Command preview:", command);
+  
+  const commandPreview = document.getElementById("commandPreview");
+  const commandPreviewArea = document.getElementById("commandPreviewArea");
+  
+  if (commandPreview) {
+    commandPreview.textContent = command;
+  }
+  
+  if (commandPreviewArea) {
+    commandPreviewArea.classList.remove("hidden");
+  }
+  
+  // 로그에도 추가
+  appendLog(`[CMD] ${command}`);
+}
+
+/**
  * 로그 메시지 추가
  * @param {string} message - 로그 메시지
  */
@@ -377,4 +415,4 @@ module.exports = {
   updateAutoCheckButtonsState,
   updateMaintenanceUI,
   showReportDialog
-}; 
+};

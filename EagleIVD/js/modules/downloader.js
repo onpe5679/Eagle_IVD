@@ -8,6 +8,7 @@ const fs = require("fs").promises;
 const path = require("path");
 const utils = require("./utils");
 const EventEmitter = require('events');
+const { VideoDownloadQueue, VideoStatus } = require('./video-download-queue');
 
 /**
  * 다운로드 관리 클래스
@@ -27,6 +28,10 @@ class DownloadManager extends EventEmitter {
       : path.join(pluginPath, "yt-dlp");
     this.ffmpegPath = null;
     this.activeDownloads = new Map();
+    
+    // 새로운 큐 시스템
+    this.downloadQueue = null;
+    this.useQueueSystem = true; // 큐 시스템 사용 여부
   }
 
   /**
@@ -37,20 +42,127 @@ class DownloadManager extends EventEmitter {
     try {
       this.ffmpegPath = await utils.getFFmpegPath();
       await this.initializeFolder();
+      
+      // 새로운 큐 시스템 초기화
+      if (this.useQueueSystem) {
+        this.initializeQueue();
+      }
     } catch (error) {
       console.error("Failed to initialize download manager:", error);
       this.updateStatusUI(`Error: Failed to initialize. ${error.message}`);
       throw error;
     }
   }
+  
+  /**
+   * 다운로드 큐 초기화 및 이벤트 핸들러 설정
+   */
+  initializeQueue() {
+    this.downloadQueue = new VideoDownloadQueue(this);
+    
+    // 큐 이벤트 리스너 설정
+    this.downloadQueue.on('queueStarted', () => {
+      this.updateStatusUI('Download queue started');
+      this.emit('queueStarted');
+    });
+    
+    this.downloadQueue.on('queueStopped', () => {
+      this.updateStatusUI('Download queue stopped');
+      this.emit('queueStopped');
+    });
+    
+    this.downloadQueue.on('queueCompleted', (stats) => {
+      this.updateStatusUI(`Queue completed: ${stats.completed}/${stats.total} downloads successful`);
+      this.emit('queueCompleted', stats);
+    });
+    
+    this.downloadQueue.on('videoStarted', (videoItem) => {
+      this.updateStatusUI(`Starting: ${videoItem.title}`);
+      this.emit('videoStarted', videoItem);
+    });
+    
+    this.downloadQueue.on('videoProgress', (videoItem) => {
+      // UI 업데이트를 verbose 처리 (10% 단위로만)
+      const progressInt = Math.floor(videoItem.progress);
+      if ((progressInt % 10 === 0 && progressInt !== videoItem.lastUIUpdateProgress) || 
+          (videoItem.progress === 100 && videoItem.lastUIUpdateProgress !== 100)) {
+        this.updateStatusUI(`${videoItem.title}: ${progressInt}%`);
+        videoItem.lastUIUpdateProgress = progressInt;
+      }
+      this.emit('videoProgress', videoItem);
+    });
+    
+    this.downloadQueue.on('videoCompleted', (videoItem) => {
+      this.updateStatusUI(`Completed: ${videoItem.title}`);
+      this.emit('videoCompleted', videoItem);
+    });
+    
+    this.downloadQueue.on('videoFailed', (videoItem) => {
+      this.updateStatusUI(`Failed: ${videoItem.title} - ${videoItem.errorMessage}`);
+      this.emit('videoFailed', videoItem);
+    });
+    
+    this.downloadQueue.on('videoImported', (videoItem) => {
+      this.updateStatusUI(`Imported to Eagle: ${videoItem.title}`);
+      this.emit('videoImported', videoItem);
+    });
+    
+    this.downloadQueue.on('queueProgress', (stats) => {
+      this.emit('queueProgress', stats);
+    });
+    
+    console.log('Download queue initialized');
+  }
+  
+  /**
+   * UI 설정값을 읽어서 큐에 적용
+   */
+  applyUISettings() {
+    if (!this.downloadQueue) return;
+    
+    try {
+      // 동시 다운로드 수 (downloadBatchSize)
+      const downloadBatchSize = parseInt(document.getElementById('downloadBatchSize')?.value) || 3;
+      this.downloadQueue.setMaxConcurrent(downloadBatchSize);
+      
+      // 속도 제한 (rateLimit)
+      const rateLimit = parseInt(document.getElementById('rateLimit')?.value) || 0;
+      this.downloadQueue.setRateLimit(rateLimit);
+      
+      console.log(`UI settings applied - Concurrent: ${downloadBatchSize}, Rate limit: ${rateLimit} KB/s`);
+    } catch (error) {
+      console.error('Failed to apply UI settings:', error);
+    }
+  }
 
   /**
-   * 다운로드 폴더 초기화
+   * 다운로드 폴더 초기화 (이전 파일들 정리 포함)
    * @returns {Promise<void>}
    */
   async initializeFolder() {
     try {
       await fs.mkdir(this.downloadFolder, { recursive: true });
+      
+      // 플러그인 시작 시 downloads 폴더의 이전 파일들 정리
+      try {
+        const files = await fs.readdir(this.downloadFolder);
+        if (files.length > 0) {
+          console.log(`[Cleanup] Cleaning up ${files.length} files from downloads folder`);
+          for (const file of files) {
+            const filePath = path.join(this.downloadFolder, file);
+            try {
+              await fs.unlink(filePath);
+              console.log(`[Cleanup] Removed: ${file}`);
+            } catch (unlinkError) {
+              console.warn(`[Cleanup] Failed to remove ${file}:`, unlinkError);
+            }
+          }
+          console.log("[Cleanup] Downloads folder cleanup completed");
+        }
+      } catch (cleanupError) {
+        console.warn("[Cleanup] Failed to clean downloads folder:", cleanupError);
+      }
+      
       console.log("Download folder ready:", this.downloadFolder);
     } catch (error) {
       console.error("Failed to create download folder:", error);
@@ -214,6 +326,11 @@ class DownloadManager extends EventEmitter {
       path.join(tempFolder, "%(title)s.%(ext)s"),
       "--progress",
       "--no-warnings",
+      "--no-check-formats",
+      "--force-ipv4",
+      "--socket-timeout", "15",
+      "--retries", "1",
+      "--file-access-retries", "1",
       "--newline",
       url,
     ];
@@ -275,8 +392,8 @@ class DownloadManager extends EventEmitter {
       formatOption = `-f ${formatString}`;
     }
 
-    // 기본 명령어 구성
-    let command = `"${this.ytDlpPath}" ${formatOption} --ffmpeg-location "${this.ffmpegPath}" -o "${path.join(this.downloadFolder, '%(title)s.%(ext)s')}" --progress --newline`;
+    // 기본 명령어 구성 (+ 안정화 플래그 적용)
+    let command = `"${this.ytDlpPath}" ${formatOption} --ffmpeg-location "${this.ffmpegPath}" -o "${path.join(this.downloadFolder, '%(title)s.%(ext)s')}" --progress --newline --no-warnings --no-check-formats --force-ipv4 --socket-timeout 15 --retries 1 --file-access-retries 1`;
 
     // 추가 옵션
     if (concurrency && concurrency > 1) {
@@ -294,14 +411,193 @@ class DownloadManager extends EventEmitter {
   }
 
   /**
+   * 개별 영상 다운로드 (새로운 큐 시스템 사용)
+   * @param {string} url - 영상 URL
+   * @param {string} format - 다운로드 포맷
+   * @param {string} quality - 다운로드 품질
+   * @param {Object} options - 추가 옵션 (sourceAddress, userAgent, cookieFile 등)
+   * @returns {Promise} - 다운로드 완료 프로미스
+   */
+  async startVideoDownload(url, format = 'best', quality = '', options = {}) {
+    if (!this.downloadQueue) {
+      throw new Error('Queue system not initialized');
+    }
+    
+    const settings = {
+      format,
+      quality,
+      folderName: options.folderName || 'Single Videos',
+      sourceAddress: options.sourceAddress || '',
+      userAgent: options.userAgent || '',
+      cookieFile: options.cookieFile || ''
+    };
+    
+    await this.downloadQueue.addVideoToQueue(url, settings);
+    
+    if (!this.downloadQueue.isRunning) {
+      this.downloadQueue.start();
+    }
+    
+    return new Promise((resolve, reject) => {
+      const handleComplete = (stats) => {
+        this.downloadQueue.removeListener('queueCompleted', handleComplete);
+        this.downloadQueue.removeListener('videoFailed', handleFailed);
+        resolve(stats);
+      };
+      
+      const handleFailed = (videoItem) => {
+        if (videoItem.url === url && !videoItem.canRetry()) {
+          this.downloadQueue.removeListener('queueCompleted', handleComplete);
+          this.downloadQueue.removeListener('videoFailed', handleFailed);
+          reject(new Error(videoItem.errorMessage));
+        }
+      };
+      
+      this.downloadQueue.on('queueCompleted', handleComplete);
+      this.downloadQueue.on('videoFailed', handleFailed);
+    });
+  }
+  
+  /**
+   * 재생목록 다운로드 (새로운 큐 시스템 사용)
+   * @param {string} url - 재생목록 URL
+   * @param {string} format - 다운로드 포맷
+   * @param {string} quality - 다운로드 품질
+   * @param {Object} options - 추가 옵션
+   * @returns {Promise} - 다운로드 완료 프로미스
+   */
+  async startPlaylistDownload(url, format = 'best', quality = '', options = {}) {
+    if (!this.downloadQueue) {
+      throw new Error('Queue system not initialized');
+    }
+    
+    // 동시 다운로드 수 설정
+    if (options.maxConcurrent) {
+      this.downloadQueue.setMaxConcurrent(options.maxConcurrent);
+    }
+    
+    const playlistSettings = {
+      format,
+      quality,
+      folderName: options.folderName,
+      sourceAddress: options.sourceAddress || '',
+      userAgent: options.userAgent || '',
+      cookieFile: options.cookieFile || ''
+    };
+    
+    const addedCount = await this.downloadQueue.addPlaylistToQueue(url, playlistSettings);
+    
+    if (!this.downloadQueue.isRunning) {
+      this.downloadQueue.start();
+    }
+    
+    return new Promise((resolve, reject) => {
+      const handleComplete = (stats) => {
+        this.downloadQueue.removeListener('queueCompleted', handleComplete);
+        resolve({ ...stats, totalAdded: addedCount });
+      };
+      
+      this.downloadQueue.on('queueCompleted', handleComplete);
+    });
+  }
+  
+  /**
+   * 큐에 여러 재생목록 추가
+   * @param {Array} playlists - 재생목록 배열 [{url, format, quality, folderName, ...}, ...]
+   * @param {Object} globalOptions - 전역 옵션
+   * @returns {Promise<number>} 총 추가된 영상 수
+   */
+  async startMultiplePlaylistsDownload(playlists, globalOptions = {}) {
+    if (!this.downloadQueue) {
+      throw new Error('Queue system not initialized');
+    }
+    
+    // 동시 다운로드 수 설정
+    if (globalOptions.maxConcurrent) {
+      this.downloadQueue.setMaxConcurrent(globalOptions.maxConcurrent);
+    }
+    
+    let totalAdded = 0;
+    
+    for (const playlist of playlists) {
+      try {
+        const playlistSettings = {
+          format: playlist.format || 'best',
+          quality: playlist.quality || '',
+          folderName: playlist.folderName,
+          sourceAddress: playlist.sourceAddress || globalOptions.sourceAddress || '',
+          userAgent: playlist.userAgent || globalOptions.userAgent || '',
+          cookieFile: playlist.cookieFile || globalOptions.cookieFile || ''
+        };
+        
+        const addedCount = await this.downloadQueue.addPlaylistToQueue(playlist.url, playlistSettings);
+        totalAdded += addedCount;
+        
+        this.updateStatusUI(`Added ${addedCount} videos from playlist: ${playlistSettings.folderName || 'Unknown'}`);
+      } catch (error) {
+        console.error(`Failed to add playlist ${playlist.url}:`, error);
+        this.updateStatusUI(`Failed to add playlist: ${error.message}`);
+      }
+    }
+    
+    if (!this.downloadQueue.isRunning) {
+      this.downloadQueue.start();
+    }
+    
+    return totalAdded;
+  }
+  
+  /**
    * 다운로드 취소
    */
   cancel() {
+    // 기존 방식 취소
     if (this.currentProcess) {
       this.currentProcess.kill();
       this.isDownloading = false;
       this.currentProcess = null;
       this.updateStatusUI("Download cancelled");
+    }
+    
+    // 큐 시스템 취소
+    if (this.downloadQueue && this.downloadQueue.isRunning) {
+      this.downloadQueue.stop();
+      this.updateStatusUI("Queue stopped");
+    }
+  }
+  
+  /**
+   * 큐 상태 반환
+   * @returns {Object} 큐 통계 정보
+   */
+  getQueueStatus() {
+    if (!this.downloadQueue) {
+      return null;
+    }
+    
+    return {
+      stats: this.downloadQueue.getQueueStats(),
+      items: this.downloadQueue.getQueueItems(),
+      isRunning: this.downloadQueue.isRunning
+    };
+  }
+  
+  /**
+   * 특정 영상 제거
+   * @param {string} videoId - 제거할 영상 ID
+   */
+  removeVideoFromQueue(videoId) {
+    if (this.downloadQueue) {
+      this.downloadQueue.removeVideo(videoId);
+    }
+  }
+  
+  /**
+   * 큐 초기화
+   */
+  clearQueue() {
+    if (this.downloadQueue) {
+      this.downloadQueue.clearQueue();
     }
   }
 
@@ -373,6 +669,11 @@ class DownloadManager extends EventEmitter {
       this.ffmpegPath,
       "--print-json",
       "--no-warnings",
+      "--no-check-formats",
+      "--force-ipv4",
+      "--socket-timeout", "15",
+      "--retries", "1",
+      "--file-access-retries", "1",
       "--skip-download",
       "--flat-playlist",
       "--playlist-end",
@@ -422,6 +723,11 @@ class DownloadManager extends EventEmitter {
         "--flat-playlist",
         "--print-json",
         "--no-warnings",
+        "--no-check-formats",
+        "--force-ipv4",
+        "--socket-timeout", "15",
+        "--retries", "1",
+        "--file-access-retries", "1",
         "--no-download",
         url,
       ];
@@ -452,4 +758,4 @@ class DownloadManager extends EventEmitter {
 }
 
 // 모듈 내보내기
-module.exports = DownloadManager; 
+module.exports = DownloadManager;

@@ -3,6 +3,7 @@
     "axion": "^0.1.0",
     "axios": "^1.7.9",
     "better-sqlite3": "^11.9.1",
+    "https-proxy-agent": "^7.0.6",
     "nedb-promises": "^6.2.3",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",

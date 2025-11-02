@@ -1,4 +1,4 @@
-@startuml
+@startuml IVD
 skinparam classAttributeIconSize 0
 skinparam class {
     BackgroundColor White
@@ -16,6 +16,62 @@ package "Core Modules" {
         + registerEventHandlers()
         - setupMaintenanceHandlers()
         - loadModules()
+    }
+    ' 연결관계
+    Main --> SettingsCtrl : uses
+    Main --> SubscriptionCtrl : uses
+    Main --> DownloadCtrl : uses
+    Main --> TabCtrl : uses
+    Main --> PreviewCtrl : uses
+    Main --> MaintenanceCtrl : uses
+    SettingsCtrl --> SettingsModule : uses
+    SettingsCtrl --> UtilsModule : uses
+    SettingsCtrl --> SubManager : uses
+    SettingsModule --> SettingsFile : reads/writes
+    SubscriptionCtrl --> SubManager : uses
+    DownloadCtrl --> DLManager : uses
+    DownloadCtrl --> UIController : uses
+    TabCtrl --> UIController : uses
+    PreviewCtrl --> UIController : uses
+    MaintenanceCtrl --> LibMaint : uses
+    MaintenanceCtrl --> UIController : uses
+
+    class "settings-controller.js" as SettingsCtrl {
+        + initSettingsUI()
+        + bindSaveSettings()
+        + bindSettingsUI()
+        + updateThreadOptions()
+    }
+    class "settings.js" as SettingsModule {
+        + loadSettings()
+        + saveSettings()
+    }
+    class "settings.json" as SettingsFile <<(F,#FFDB99)>> {
+        + (파일)
+    }
+    class "utils.js" as UtilsModule {
+        + getNetworkInterfaces()
+        ... 기타 유틸 함수
+    }
+
+    class "subscription-controller.js" as SubscriptionCtrl {
+        + bindSubscriptionUI()
+    }
+
+    class "download-controller.js" as DownloadCtrl {
+        + bindEvents(downloadManager, uiController)
+    }
+
+    class "tab-controller.js" as TabCtrl {
+        + bindTabs()
+    }
+
+    class "preview-controller.js" as PreviewCtrl {
+        + bindPreviewEvents()
+    }
+
+    class "maintenance-controller.js" as MaintenanceCtrl {
+        + bindMaintenanceEvents()
     }
 
     class "subscription-manager.js" as SubManager {
