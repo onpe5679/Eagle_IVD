@@ -283,7 +283,7 @@ Video ID: ${videoId || 'Unknown'}`,
           let importedSuccessfully = false;
 
           try {
-            const item = await withTimeout(eagle.item.addFromPath(filePath, fileMeta));
+            const item = await withTimeout(eagleApi.item.addFromPath(filePath, fileMeta));
             console.log(`Added ${file} to Eagle`, item);
             this.emit('videoAdded', { file, metadata: fileMeta });
             // Eagle 추가 성공 시 DB 업데이트 (라이브러리별 분리)
@@ -305,7 +305,7 @@ Video ID: ${videoId || 'Unknown'}`,
               console.log(`${file} already exists, updating folder and metadata`);
               const searchURL = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
               try {
-                const items = await withTimeout(eagle.item.get({ url: searchURL }));
+                const items = await withTimeout(eagleApi.item.get({ url: searchURL }));
                 if (items.length) {
                   const existing = items[0];
                   
