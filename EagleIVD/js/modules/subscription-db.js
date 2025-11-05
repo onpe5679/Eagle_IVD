@@ -712,13 +712,13 @@ async function migrateTempVideoToMain(tempVideoId, playlistId) {
     const tempVideo = await db.get('SELECT * FROM temp_videos WHERE id = ?', [tempVideoId]);
     if (!tempVideo) throw new Error(`Temp video ${tempVideoId} not found`);
     
-    // 플레이리스트 정보 조회 (folder_id 확인용)
-    const playlist = await db.get('SELECT folder_id FROM playlists WHERE id = ?', [playlistId]);
-    const targetFolderId = playlist?.folder_id;
+    // 플레이리스트 정보 조회 (eagle_folder_id 확인용)
+    const playlist = await db.get('SELECT eagle_folder_id FROM playlists WHERE id = ?', [playlistId]);
+    const targetFolderId = playlist?.eagle_folder_id;
     
     // 같은 video_id가 main videos에 이미 있는지 확인
     const existingVideo = await db.get(
-      'SELECT id, folder_id, eagle_item_id FROM videos WHERE video_id = ? LIMIT 1',
+      'SELECT id, folder_id FROM videos WHERE video_id = ? LIMIT 1',
       [tempVideo.video_id]
     );
     
@@ -729,13 +729,13 @@ async function migrateTempVideoToMain(tempVideoId, playlistId) {
       if (existingVideo.folder_id !== tempVideo.eagle_folder_id && targetFolderId !== existingVideo.folder_id) {
         console.log(`[Migration] ⚠️  folder_id mismatch: existing=${existingVideo.folder_id}, temp=${tempVideo.eagle_folder_id}, target=${targetFolderId}`);
         
-        // Eagle API로 폴더 추가 (별도 처리 필요, 반환값에 플래그 추가)
+        // Eagle API로 폴더 추가 (temp_videos의 eagle_item_id 사용)
         console.log(`[Migration] 📌 Need to add folder ${tempVideo.eagle_folder_id} to Eagle item ${tempVideo.eagle_item_id}`);
         
         // temp_videos 업데이트 (기존 비디오 ID 참조)
         await db.run(`
           UPDATE temp_videos 
-          SET synced_to_main = 1, synced_video_id = ?, needs_folder_sync = 1
+          SET synced_to_main = 1, synced_video_id = ?
           WHERE id = ?
         `, [existingVideo.id, tempVideoId]);
         
