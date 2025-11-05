@@ -466,9 +466,28 @@ class EagleSync extends EventEmitter {
       const nonDuplicateVideos = tempVideos.filter(v => v.is_duplicate === 0);
 
       let migratedCount = 0;
+      let folderSyncCount = 0;
+      
+      const eagleApi = require('./eagle-api');
+      
       for (const tempVideo of nonDuplicateVideos) {
-        await subscriptionDb.migrateTempVideoToMain(tempVideo.id, mainPlaylistId);
+        const migrationResult = await subscriptionDb.migrateTempVideoToMain(tempVideo.id, mainPlaylistId);
         migratedCount++;
+        
+        // folder_id 불일치 시 Eagle API로 폴더 추가
+        if (migrationResult.needsFolderSync) {
+          try {
+            await eagleApi.addFolderToItem(migrationResult.eagleItemId, migrationResult.newFolderId);
+            folderSyncCount++;
+            console.log(`✅ [EagleSync] Added folder ${migrationResult.newFolderId} to Eagle item ${migrationResult.eagleItemId}`);
+          } catch (error) {
+            console.error(`❌ [EagleSync] Failed to add folder for item ${migrationResult.eagleItemId}:`, error);
+          }
+        }
+      }
+      
+      if (folderSyncCount > 0) {
+        console.log(`📁 [EagleSync] Synced ${folderSyncCount} videos to additional folders`);
       }
 
       // temp_playlist 업데이트
@@ -533,9 +552,28 @@ class EagleSync extends EventEmitter {
       const nonDuplicateVideos = tempVideos.filter(v => v.is_duplicate === 0);
 
       let migratedCount = 0;
+      let folderSyncCount = 0;
+      
+      const eagleApi = require('./eagle-api');
+      
       for (const tempVideo of nonDuplicateVideos) {
-        await subscriptionDb.migrateTempVideoToMain(tempVideo.id, existingPlaylistId);
+        const migrationResult = await subscriptionDb.migrateTempVideoToMain(tempVideo.id, existingPlaylistId);
         migratedCount++;
+        
+        // folder_id 불일치 시 Eagle API로 폴더 추가
+        if (migrationResult.needsFolderSync) {
+          try {
+            await eagleApi.addFolderToItem(migrationResult.eagleItemId, migrationResult.newFolderId);
+            folderSyncCount++;
+            console.log(`✅ [EagleSync] Added folder ${migrationResult.newFolderId} to Eagle item ${migrationResult.eagleItemId}`);
+          } catch (error) {
+            console.error(`❌ [EagleSync] Failed to add folder for item ${migrationResult.eagleItemId}:`, error);
+          }
+        }
+      }
+      
+      if (folderSyncCount > 0) {
+        console.log(`📁 [EagleSync] Synced ${folderSyncCount} videos to additional folders`);
       }
 
       // temp_playlist 업데이트

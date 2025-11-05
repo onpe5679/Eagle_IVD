@@ -71,6 +71,40 @@ async function updateItemFolders(itemId, folderIds) {
 }
 
 /**
+ * 아이템에 폴더 추가 (기존 폴더 유지)
+ * @param {string} itemId - 아이템 ID (Eagle item ID)
+ * @param {string} newFolderId - 추가할 폴더 ID
+ * @returns {Promise<object>} 업데이트된 아이템 객체
+ */
+async function addFolderToItem(itemId, newFolderId) {
+  try {
+    // 현재 아이템 조회
+    const item = await eagle.item.getById(itemId);
+    if (!item) {
+      throw new Error(`Item ${itemId} not found`);
+    }
+    
+    // 폴더가 이미 있는지 확인
+    const currentFolders = item.folders || [];
+    if (currentFolders.includes(newFolderId)) {
+      console.log(`Item ${itemId} already in folder ${newFolderId}`);
+      return item;
+    }
+    
+    // 새 폴더 추가
+    const updatedFolders = [...currentFolders, newFolderId];
+    item.folders = updatedFolders;
+    await item.save();
+    
+    console.log(`✅ Added folder ${newFolderId} to item ${itemId} (total folders: ${updatedFolders.length})`);
+    return item;
+  } catch (error) {
+    console.error(`❌ Failed to add folder to item ${itemId}:`, error);
+    throw error;
+  }
+}
+
+/**
  * 아이템의 태그 업데이트
  * @param {string} itemId - 아이템 ID
  * @param {Array<string>} tags - 태그 배열
@@ -187,6 +221,7 @@ module.exports = {
   addItemToLibrary,
   createOrFindFolder,
   updateItemFolders,
+  addFolderToItem,
   updateItemTags,
   isDuplicateItem,
   prepareItemMetadata,

@@ -494,7 +494,8 @@ async function markVideoAsEagleLinked(videoId, folderId = undefined) {
 }
 
 /**
- * 완전히 처리된 비디오 ID 목록 조회 (다운로드됨 + Eagle 연결됨)
+ * 플레이리스트의 완전히 처리된 비디오 ID 목록 조회
+ * main videos + temp_videos (Eagle에 이미 있는 것) 포함
  * @param {number} playlistId - 플레이리스트 ID
  * @returns {Promise<Array<string>>} 처리 완료된 비디오 ID 목록
  */
@@ -505,16 +506,32 @@ async function getCompletedVideoIds(playlistId) {
       'SELECT video_id, status, downloaded, eagle_linked FROM videos WHERE playlist_id = ?',
       [playlistId]
     );
-    console.log(`[DB Debug] Playlist ${playlistId} - 전체 영상 상태:`, allVideos);
+    console.log(`[DB Debug] Playlist ${playlistId} - main videos:`, allVideos);
     
-    // 완전 처리된 영상만 조회
+    // 1. main videos에서 완전 처리된 영상 조회
     const completedRows = await db.all(
       'SELECT video_id FROM videos WHERE playlist_id = ? AND downloaded = 1 AND eagle_linked = 1',
       [playlistId]
     );
-    console.log(`[DB Debug] Playlist ${playlistId} - 완전 처리된 영상:`, completedRows.map(r => r.video_id));
     
-    return completedRows.map(row => row.video_id);
+    // 2. temp_videos에서 Eagle에 이미 있는 영상 조회
+    // (video_id만 중복 체크, folder_id는 별도 처리)
+    const tempRows = await db.all(`
+      SELECT DISTINCT tv.video_id 
+      FROM temp_videos tv
+      WHERE tv.is_duplicate = 0
+    `);
+    
+    // 3. 완료된 비디오 ID 집합
+    const completedSet = new Set(completedRows.map(r => r.video_id));
+    const tempSet = new Set(tempRows.map(r => r.video_id));
+    
+    // 4. main에 완료된 것 + temp에 있는 것 = 다운로드 불필요
+    const allCompletedIds = new Set([...completedSet, ...tempSet]);
+    
+    console.log(`[DB Debug] Playlist ${playlistId} - 완료: ${completedSet.size}개 (main) + ${tempSet.size}개 (temp) = ${allCompletedIds.size}개`);
+    
+    return Array.from(allCompletedIds);
   } catch (error) {
     console.error(`[DB Error] getCompletedVideoIds failed for playlist ${playlistId}:`, error);
     return [];
@@ -648,6 +665,18 @@ async function getTempVideosByPlaylist(tempPlaylistId) {
 }
 
 /**
+ * video_id로 temp_videos에서 조회 (Eagle 폴더 정보 포함)
+ * @param {string} videoId
+ * @returns {Promise<Array>} temp_videos 레코드 배열
+ */
+async function getTempVideoByVideoId(videoId) {
+  return await db.all(
+    'SELECT * FROM temp_videos WHERE video_id = ? AND is_duplicate = 0',
+    [videoId]
+  );
+}
+
+/**
  * temp_playlist 업데이트
  */
 async function updateTempPlaylist(id, data) {
@@ -676,16 +705,61 @@ async function updateTempPlaylist(id, data) {
 /**
  * temp_video를 main videos 테이블로 이동
  * Eagle에서 동기화된 비디오이므로 이미 다운로드 완료된 상태로 설정
+ * folder_id가 다른 경우 Eagle API로 폴더 추가
  */
 async function migrateTempVideoToMain(tempVideoId, playlistId) {
   return await withTransaction(async (db) => {
     const tempVideo = await db.get('SELECT * FROM temp_videos WHERE id = ?', [tempVideoId]);
     if (!tempVideo) throw new Error(`Temp video ${tempVideoId} not found`);
     
-    // main videos 테이블에 추가
-    // Eagle에 이미 있는 비디오이므로 completed 상태로 추가
+    // 플레이리스트 정보 조회 (folder_id 확인용)
+    const playlist = await db.get('SELECT folder_id FROM playlists WHERE id = ?', [playlistId]);
+    const targetFolderId = playlist?.folder_id;
+    
+    // 같은 video_id가 main videos에 이미 있는지 확인
+    const existingVideo = await db.get(
+      'SELECT id, folder_id, eagle_item_id FROM videos WHERE video_id = ? LIMIT 1',
+      [tempVideo.video_id]
+    );
+    
+    if (existingVideo) {
+      console.log(`[Migration] Video ${tempVideo.video_id} already exists in main videos (folder_id: ${existingVideo.folder_id})`);
+      
+      // folder_id 비교
+      if (existingVideo.folder_id !== tempVideo.eagle_folder_id && targetFolderId !== existingVideo.folder_id) {
+        console.log(`[Migration] ⚠️  folder_id mismatch: existing=${existingVideo.folder_id}, temp=${tempVideo.eagle_folder_id}, target=${targetFolderId}`);
+        
+        // Eagle API로 폴더 추가 (별도 처리 필요, 반환값에 플래그 추가)
+        console.log(`[Migration] 📌 Need to add folder ${tempVideo.eagle_folder_id} to Eagle item ${tempVideo.eagle_item_id}`);
+        
+        // temp_videos 업데이트 (기존 비디오 ID 참조)
+        await db.run(`
+          UPDATE temp_videos 
+          SET synced_to_main = 1, synced_video_id = ?, needs_folder_sync = 1
+          WHERE id = ?
+        `, [existingVideo.id, tempVideoId]);
+        
+        return {
+          videoId: existingVideo.id,
+          needsFolderSync: true,
+          eagleItemId: tempVideo.eagle_item_id,
+          newFolderId: tempVideo.eagle_folder_id
+        };
+      }
+      
+      // folder_id 일치: 마이그레이션만
+      await db.run(`
+        UPDATE temp_videos 
+        SET synced_to_main = 1, synced_video_id = ?
+        WHERE id = ?
+      `, [existingVideo.id, tempVideoId]);
+      
+      return { videoId: existingVideo.id, needsFolderSync: false };
+    }
+    
+    // 새 비디오 추가
     const result = await db.run(`
-      INSERT OR IGNORE INTO videos 
+      INSERT INTO videos 
       (playlist_id, video_id, title, status, downloaded, eagle_linked, folder_id, downloaded_at)
       VALUES (?, ?, ?, 'completed', 1, 1, ?, ?)
     `, [
@@ -703,7 +777,7 @@ async function migrateTempVideoToMain(tempVideoId, playlistId) {
       WHERE id = ?
     `, [result.lastID, tempVideoId]);
     
-    return result.lastID;
+    return { videoId: result.lastID, needsFolderSync: false };
   });
 }
 
@@ -759,6 +833,7 @@ module.exports = {
   addTempVideo,
   getAllTempPlaylists,
   getTempVideosByPlaylist,
+  getTempVideoByVideoId,
   updateTempPlaylist,
   migrateTempVideoToMain,
   clearTempTables,
