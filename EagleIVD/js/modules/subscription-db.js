@@ -132,6 +132,54 @@ async function initDatabase(libraryPath) {
     END;
   `);
 
+  // temp_playlists 테이블 (Eagle 동기화용 임시 플레이리스트)
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS temp_playlists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      eagle_folder_id TEXT UNIQUE,
+      eagle_folder_name TEXT,
+      detected_playlist_name TEXT,
+      playlist_url TEXT,
+      video_count INTEGER DEFAULT 0,
+      confidence_score REAL DEFAULT 0.0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      synced_to_main INTEGER DEFAULT 0,
+      synced_playlist_id INTEGER
+    );
+  `);
+
+  // temp_videos 테이블 (Eagle 동기화용 임시 비디오)
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS temp_videos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      temp_playlist_id INTEGER,
+      eagle_item_id TEXT UNIQUE,
+      video_id TEXT,
+      video_url TEXT,
+      title TEXT,
+      uploader TEXT,
+      upload_date TEXT,
+      view_count INTEGER,
+      duration INTEGER,
+      eagle_folder_id TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      synced_to_main INTEGER DEFAULT 0,
+      synced_video_id INTEGER,
+      is_duplicate INTEGER DEFAULT 0,
+      master_video_id TEXT,
+      FOREIGN KEY (temp_playlist_id) REFERENCES temp_playlists(id)
+    );
+  `);
+
+  // temp 테이블 인덱스
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_temp_playlists_folder_id ON temp_playlists(eagle_folder_id);`);
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_temp_playlists_synced ON temp_playlists(synced_to_main);`);
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_temp_videos_playlist_id ON temp_videos(temp_playlist_id);`);
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_temp_videos_video_id ON temp_videos(video_id);`);
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_temp_videos_eagle_item_id ON temp_videos(eagle_item_id);`);
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_temp_videos_synced ON temp_videos(synced_to_main);`);
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_temp_videos_duplicate ON temp_videos(is_duplicate);`);
+
   // 기존 'done' 상태를 'completed'로 마이그레이션 (중복 다운로드 문제 해결)
   try {
     const doneCount = await db.get("SELECT COUNT(*) as count FROM videos WHERE status = 'done'");
@@ -528,6 +576,159 @@ async function updatePlaylistSummary(id, { last_checked, videos_from_yt } = {}) 
   return updatePlaylist(id, fields);
 }
 
+// ============================================
+// Temp Tables Functions (Eagle Sync)
+// ============================================
+
+/**
+ * temp_playlists 테이블에 임시 플레이리스트 추가
+ */
+async function addTempPlaylist(data) {
+  const result = await db.run(`
+    INSERT INTO temp_playlists 
+    (eagle_folder_id, eagle_folder_name, detected_playlist_name, video_count, confidence_score)
+    VALUES (?, ?, ?, ?, ?)
+  `, [
+    data.eagle_folder_id,
+    data.eagle_folder_name,
+    data.detected_playlist_name || null,
+    data.video_count || 0,
+    data.confidence_score || 0.0
+  ]);
+  return result.lastID;
+}
+
+/**
+ * temp_videos 테이블에 임시 비디오 추가
+ */
+async function addTempVideo(data) {
+  const result = await db.run(`
+    INSERT OR IGNORE INTO temp_videos 
+    (temp_playlist_id, eagle_item_id, video_id, video_url, title, uploader, 
+     upload_date, view_count, duration, eagle_folder_id, is_duplicate, master_video_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    data.temp_playlist_id,
+    data.eagle_item_id,
+    data.video_id,
+    data.video_url,
+    data.title,
+    data.uploader || null,
+    data.upload_date || null,
+    data.view_count || null,
+    data.duration || null,
+    data.eagle_folder_id,
+    data.is_duplicate || 0,
+    data.master_video_id || null
+  ]);
+  return result.lastID;
+}
+
+/**
+ * 모든 temp_playlists 조회
+ */
+async function getAllTempPlaylists() {
+  return await db.all(`
+    SELECT tp.*, 
+           (SELECT COUNT(*) FROM temp_videos WHERE temp_playlist_id = tp.id) as actual_video_count
+    FROM temp_playlists tp
+    WHERE synced_to_main = 0
+    ORDER BY confidence_score DESC, video_count DESC
+  `);
+}
+
+/**
+ * temp_playlist의 비디오 목록 조회
+ */
+async function getTempVideosByPlaylist(tempPlaylistId) {
+  return await db.all(
+    'SELECT * FROM temp_videos WHERE temp_playlist_id = ? ORDER BY created_at',
+    [tempPlaylistId]
+  );
+}
+
+/**
+ * temp_playlist 업데이트
+ */
+async function updateTempPlaylist(id, data) {
+  const fields = [];
+  const values = [];
+  
+  if (data.playlist_url !== undefined) {
+    fields.push('playlist_url = ?');
+    values.push(data.playlist_url);
+  }
+  if (data.synced_to_main !== undefined) {
+    fields.push('synced_to_main = ?');
+    values.push(data.synced_to_main);
+  }
+  if (data.synced_playlist_id !== undefined) {
+    fields.push('synced_playlist_id = ?');
+    values.push(data.synced_playlist_id);
+  }
+  
+  if (fields.length === 0) return;
+  
+  values.push(id);
+  await db.run(`UPDATE temp_playlists SET ${fields.join(', ')} WHERE id = ?`, values);
+}
+
+/**
+ * temp_video를 main videos 테이블로 이동
+ * Eagle에서 동기화된 비디오이므로 이미 다운로드 완료된 상태로 설정
+ */
+async function migrateTempVideoToMain(tempVideoId, playlistId) {
+  return await withTransaction(async (db) => {
+    const tempVideo = await db.get('SELECT * FROM temp_videos WHERE id = ?', [tempVideoId]);
+    if (!tempVideo) throw new Error(`Temp video ${tempVideoId} not found`);
+    
+    // main videos 테이블에 추가
+    // Eagle에 이미 있는 비디오이므로 completed 상태로 추가
+    const result = await db.run(`
+      INSERT OR IGNORE INTO videos 
+      (playlist_id, video_id, title, status, downloaded, eagle_linked, folder_id, downloaded_at)
+      VALUES (?, ?, ?, 'completed', 1, 1, ?, ?)
+    `, [
+      playlistId, 
+      tempVideo.video_id, 
+      tempVideo.title, 
+      tempVideo.eagle_folder_id,
+      new Date().toISOString()
+    ]);
+    
+    // temp_videos 업데이트
+    await db.run(`
+      UPDATE temp_videos 
+      SET synced_to_main = 1, synced_video_id = ?
+      WHERE id = ?
+    `, [result.lastID, tempVideoId]);
+    
+    return result.lastID;
+  });
+}
+
+/**
+ * temp 테이블 전체 삭제 (초기화)
+ */
+async function clearTempTables() {
+  return await withTransaction(async (db) => {
+    await db.run('DELETE FROM temp_videos');
+    await db.run('DELETE FROM temp_playlists');
+    console.log('[DB] Temp tables cleared');
+  });
+}
+
+/**
+ * 동기화된 temp 데이터 삭제
+ */
+async function clearSyncedTempData() {
+  return await withTransaction(async (db) => {
+    await db.run('DELETE FROM temp_videos WHERE synced_to_main = 1');
+    await db.run('DELETE FROM temp_playlists WHERE synced_to_main = 1');
+    console.log('[DB] Synced temp data cleared');
+  });
+}
+
 module.exports = {
   initDatabase,
   getAllPlaylists,
@@ -552,5 +753,14 @@ module.exports = {
   cleanupStaleProcessingLocks,
   // added helpers
   incrementPlaylistVideos,
-  updatePlaylistSummary
+  updatePlaylistSummary,
+  // temp tables
+  addTempPlaylist,
+  addTempVideo,
+  getAllTempPlaylists,
+  getTempVideosByPlaylist,
+  updateTempPlaylist,
+  migrateTempVideoToMain,
+  clearTempTables,
+  clearSyncedTempData
 };

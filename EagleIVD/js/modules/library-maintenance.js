@@ -300,107 +300,6 @@ class LibraryMaintenance extends EventEmitter {
   }
 
   /**
-   * 불일치 항목 수정 (DB에만 추가)
-   * Eagle에만 존재하는 항목을 DB의 "기타 YouTube 영상" 플레이리스트에 추가합니다.
-   * @returns {Promise<object>} 수정 결과 리포트
-   */
-  async fixInconsistencies() { // mode 옵션 제거 (DB 수정만 지원)
-    if (this.isRunning) {
-      throw new Error("이미 작업이 실행 중입니다");
-    }
-    this.isRunning = true;
-    this.resetStats();
-
-    try {
-      this.emit('statusUpdate', "라이브러리 일치성 검사 및 DB 수정을 시작합니다...");
-      const report = await this.checkConsistency(); // 일치성 검사 먼저 실행
-      const missingInDB = report.details.missingInDB;
-
-      if (missingInDB.length === 0) {
-          this.emit('statusUpdate', "DB 수정: Eagle에만 있는 항목이 없어 DB 수정 작업을 건너<0xEB><0x9C><0x8D>니다.");
-          return this.generateFixReport('db');
-      }
-
-      // "기타 YouTube 영상" 플레이리스트 확인 또는 생성
-      const otherPlaylistTitle = "기타 YouTube 영상";
-      let otherPlaylist = await subscriptionDb.getPlaylistByUrl('internal://other_videos');
-      let otherPlaylistId;
-
-      if (!otherPlaylist) {
-        console.log(`"${otherPlaylistTitle}" 플레이리스트 생성 시도...`);
-        try {
-            otherPlaylistId = await subscriptionDb.addPlaylist({
-                user_title: otherPlaylistTitle,
-                youtube_title: otherPlaylistTitle,
-                videos_from_yt: 0,
-                videos: 0,
-                url: 'internal://other_videos', // 고유 URL 부여
-                format: 'best',
-                quality: ''
-            });
-            console.log(`"${otherPlaylistTitle}" 플레이리스트 생성 완료 (ID: ${otherPlaylistId})`);
-        } catch (createError) {
-             console.error(`"${otherPlaylistTitle}" 플레이리스트 생성 실패:`, createError);
-             // 생성 실패 시 기존 플레이리스트 다시 조회 시도 (동시성 문제 등)
-             otherPlaylist = await subscriptionDb.getPlaylistByUrl('internal://other_videos');
-             if (otherPlaylist) {
-                 otherPlaylistId = otherPlaylist.id;
-                 console.log(`기존 "${otherPlaylistTitle}" 플레이리스트 사용 (ID: ${otherPlaylistId})`);
-             } else {
-                 throw new Error(`"${otherPlaylistTitle}" 플레이리스트를 찾거나 생성할 수 없습니다.`);
-             }
-        }
-      } else {
-        otherPlaylistId = otherPlaylist.id;
-        console.log(`기존 "${otherPlaylistTitle}" 플레이리스트 사용 (ID: ${otherPlaylistId})`);
-      }
-
-      // Eagle에만 있는 항목을 DB에 추가
-      let addedCount = 0;
-      for (const videoId of missingInDB) {
-        try {
-            // INSERT OR IGNORE 를 사용하므로 이미 있어도 에러 없음
-           await subscriptionDb.addVideo({
-                playlist_id: otherPlaylistId,
-                video_id: videoId,
-                title: `Eagle에서 발견 (${videoId})`, // 임시 제목
-                status: 'unknown', // 상태는 알 수 없음
-                downloaded: 0,
-                auto_download: 0,
-                skip: 1, // 기본적으로 자동 다운로드 대상 아님
-                eagle_linked: 1 // Eagle에는 존재함
-            });
-            addedCount++;
-            if (addedCount % 50 === 0) {
-                this.emit('statusUpdate', `DB에 항목 추가 중: ${addedCount}/${missingInDB.length}`);
-            }
-        } catch (addError) {
-          console.error(`DB에 VideoID ${videoId} 추가 중 오류:`, addError);
-          this.stats.errors.push(`DB 추가 실패 (${videoId}): ${addError.message}`);
-        }
-      }
-
-      this.stats.inconsistenciesResolved = addedCount;
-      this.emit('statusUpdate', `DB 수정 완료: ${addedCount}개 항목을 DB에 추가했습니다`);
-
-      // "기타" 플레이리스트의 비디오 카운트 업데이트
-      const videosInOther = await subscriptionDb.getVideosByPlaylist(otherPlaylistId);
-      await subscriptionDb.updatePlaylist(otherPlaylistId, { videos: videosInOther.length });
-
-      return this.generateFixReport('db');
-
-    } catch (error) {
-      console.error("불일치 수정 중 오류:", error);
-      this.stats.errors.push(error.message);
-      this.emit('statusUpdate', `불일치 수정 오류: ${error.message}`);
-      throw error;
-    } finally {
-      this.isRunning = false;
-      this.emit('fixComplete');
-    }
-  }
-
-  /**
    * DB에서 불일치 항목 삭제
    * DB에는 있지만 Eagle 라이브러리에 없는 항목을 DB에서 제거합니다.
    * @returns {Promise<object>} 삭제 결과 리포트
@@ -478,10 +377,47 @@ class LibraryMaintenance extends EventEmitter {
    * @returns {string|null} 비디오 ID
    */
   extractVideoId(eagleItem) {
-    const annotationMatch = eagleItem.annotation?.match(/Video ID: ([a-zA-Z0-9_-]+)/);
-    if (annotationMatch) return annotationMatch[1];
-    const urlMatch = eagleItem.website?.match(/(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]+)/);
-    return urlMatch ? urlMatch[1] : null;
+    // annotation에서 추출 (가장 신뢰할 수 있음)
+    if (eagleItem.annotation) {
+      const match = eagleItem.annotation.match(/Video ID: ([a-zA-Z0-9_-]+)/);
+      if (match) return match[1];
+    }
+
+    // URL에서 추출 (Eagle API 문서: Item 객체는 url 속성만 존재)
+    const url = eagleItem.url;
+    if (!url) return null;
+    
+    // YouTube URL에서 video ID 추출 (보통 11자리, 하지만 유연하게 처리)
+    // 지원 형식:
+    // - https://www.youtube.com/watch?v=VIDEO_ID
+    // - https://www.youtube.com/watch?v=VIDEO_ID&other=params
+    // - https://youtu.be/VIDEO_ID
+    // - https://youtu.be/VIDEO_ID?si=...
+    // - youtu.be/VIDEO_ID (프로토콜 없음)
+    // - https://www.youtube.com/embed/VIDEO_ID
+    // - https://www.youtube.com/v/VIDEO_ID
+    
+    // 1. youtu.be 단축 URL 형식 (가장 많이 사용)
+    let match = url.match(/(?:https?:\/\/)?(?:www\.)?youtu\.be\/([a-zA-Z0-9_-]+?)(?:[?&]|$)/);
+    if (match) return match[1];
+    
+    // 2. youtube.com/watch?v= 형식
+    match = url.match(/(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?(?:.*&)?v=([a-zA-Z0-9_-]+?)(?:[&]|$)/);
+    if (match) return match[1];
+    
+    // 3. youtube.com/embed/ 형식
+    match = url.match(/(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([a-zA-Z0-9_-]+?)(?:[?&]|$)/);
+    if (match) return match[1];
+    
+    // 4. youtube.com/v/ 형식
+    match = url.match(/(?:https?:\/\/)?(?:www\.)?youtube\.com\/v\/([a-zA-Z0-9_-]+?)(?:[?&]|$)/);
+    if (match) return match[1];
+    
+    // 5. 마지막 시도: URL 어디든 v= 파라미터 찾기
+    match = url.match(/[?&]v=([a-zA-Z0-9_-]+?)(?:[&]|$)/);
+    if (match) return match[1];
+
+    return null;
   }
 
   /**

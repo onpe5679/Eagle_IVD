@@ -57,6 +57,15 @@ class SubscriptionImporter extends EventEmitter {
         new Promise((_, reject) => setTimeout(() => reject(new Error("Import timeout")), IMPORT_TIMEOUT_MS))
       ]);
 
+      // Eagle API 초기화 (전체 함수 스코프)
+      const eagleApi = (typeof window !== 'undefined' && window.eagle)
+        ? window.eagle
+        : (typeof globalThis !== 'undefined' ? globalThis.eagle : undefined);
+
+      if (!eagleApi || !eagleApi.folder || !eagleApi.item) {
+        throw new Error('Eagle API is not available. Please ensure Eagle is running.');
+      }
+
       // 폴더명 결정: customFolderName 우선, 없으면 fallback
       let folderName = customFolderName && customFolderName.trim() ?
         customFolderName : (metadata.playlist || this.getPlaylistId(url) || "Default Playlist");
@@ -78,16 +87,27 @@ class SubscriptionImporter extends EventEmitter {
 
       // 기존 폴더 확인 또는 생성
       try {
-        const eagleApi = (typeof window !== 'undefined' && window.eagle)
-          ? window.eagle
-          : (typeof globalThis !== 'undefined' ? globalThis.eagle : undefined);
 
         if (!eagleApi || !eagleApi.folder) {
           throw new Error('Eagle API is not available while resolving playlist folder');
         }
 
-        const allFolders = await eagleApi.folder.getAll();
-        console.log(`Looking for existing folder: id=${playlistFolderId || 'null'}, name="${folderName}"`);
+        const topLevelFolders = await eagleApi.folder.getAll();
+        
+        // 모든 하위 폴더를 포함하도록 재귀적으로 수집
+        const flattenFolders = (folders) => {
+          const result = [];
+          for (const folder of folders) {
+            result.push(folder);
+            if (folder.children && Array.isArray(folder.children) && folder.children.length > 0) {
+              result.push(...flattenFolders(folder.children));
+            }
+          }
+          return result;
+        };
+        
+        const allFolders = flattenFolders(topLevelFolders);
+        console.log(`Looking for existing folder: id=${playlistFolderId || 'null'}, name="${folderName}" (총 ${allFolders.length}개 폴더 검색, 최상위: ${topLevelFolders.length}개)`);
 
         if (playlistFolderId) {
           const storedFolder = allFolders.find(f => f.id === playlistFolderId);
@@ -303,6 +323,15 @@ Video ID: ${videoId || 'Unknown'}`,
           } catch (addErr) {
             if (addErr.message === 'Import timeout') {
               console.error(`Import timeout for ${file}, skipping file.`);
+              // DB에 실패 기록
+              if (videoId) {
+                try {
+                  await subscriptionDb.markVideoDownloadComplete(videoId, 'failed', addErr.message);
+                  console.log(`[DB Update] Marked video ${videoId} as failed due to timeout.`);
+                } catch (dbError) {
+                  console.error(`[DB Update] Failed to mark video ${videoId} as failed:`, dbError);
+                }
+              }
             } else if (addErr.message.includes('Item already exists')) {
               console.log(`${file} already exists, updating folder and metadata`);
               const searchURL = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
@@ -336,9 +365,27 @@ Video ID: ${videoId || 'Unknown'}`,
                 }
               } catch (dupErr) {
                 console.error(`Error updating duplicate for ${file}:`, dupErr);
+                // 중복 업데이트 실패 시 DB에 실패 기록
+                if (videoId) {
+                  try {
+                    await subscriptionDb.markVideoDownloadComplete(videoId, 'failed', dupErr.message);
+                    console.log(`[DB Update] Marked video ${videoId} as failed due to duplicate update error.`);
+                  } catch (dbError) {
+                    console.error(`[DB Update] Failed to mark video ${videoId} as failed:`, dbError);
+                  }
+                }
               }
             } else {
               console.error(`Error adding file ${file}:`, addErr);
+              // 일반 Eagle 추가 실패 시 DB에 실패 기록
+              if (videoId) {
+                try {
+                  await subscriptionDb.markVideoDownloadComplete(videoId, 'failed', addErr.message);
+                  console.log(`[DB Update] Marked video ${videoId} as failed due to Eagle import error.`);
+                } catch (dbError) {
+                  console.error(`[DB Update] Failed to mark video ${videoId} as failed:`, dbError);
+                }
+              }
             }
           }
           if (importedSuccessfully) {

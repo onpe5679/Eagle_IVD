@@ -18,9 +18,9 @@ async function addItemToLibrary(filePath, metadata) {
     // 이미 존재하는 아이템인 경우 처리
     if (error.message && error.message.includes("Item already exists")) {
       console.log(`${filePath} already exists in Eagle library`);
-      // 웹사이트 URL로 아이템 검색
+      // URL로 아이템 검색 (website는 추가할 때 사용, 검색은 url 사용)
       if (metadata.website) {
-        const items = await eagle.item.get({ website: metadata.website });
+        const items = await eagle.item.get({ url: metadata.website });
         if (items.length > 0) {
           return items[0]; // 첫 번째 일치 항목 반환
         }

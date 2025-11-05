@@ -290,6 +290,20 @@ function showError(message) {
 }
 
 /**
+ * 성공 메시지 표시
+ * @param {string} message - 성공 메시지
+ */
+function showSuccess(message) {
+  updateStatusUI(`✅ ${message}`);
+  appendLog(`✅ ${message}`);
+  
+  // alert로도 표시 (선택사항)
+  if (message.length < 200) {
+    alert(message);
+  }
+}
+
+/**
  * 자동 체크 버튼 상태 업데이트
  * @param {boolean} isRunning - 자동 체크 실행 중 여부
  */
@@ -412,6 +426,7 @@ module.exports = {
   appendLog,
   showTab,
   showError,
+  showSuccess,
   updateAutoCheckButtonsState,
   updateMaintenanceUI,
   showReportDialog

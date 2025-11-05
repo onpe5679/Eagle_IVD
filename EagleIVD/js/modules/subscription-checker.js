@@ -321,15 +321,48 @@ class SubscriptionChecker {
           throw new Error('Eagle API is not available while resolving playlist folder');
         }
 
-        const allFolders = await eagleApi.folder.getAll();
+        const topLevelFolders = await eagleApi.folder.getAll();
+        
+        // 모든 하위 폴더를 포함하도록 재귀적으로 수집
+        const flattenFolders = (folders) => {
+          const result = [];
+          for (const folder of folders) {
+            result.push(folder);
+            if (folder.children && Array.isArray(folder.children) && folder.children.length > 0) {
+              result.push(...flattenFolders(folder.children));
+            }
+          }
+          return result;
+        };
+        
+        const allFolders = flattenFolders(topLevelFolders);
+        
+        // 디버깅: 폴더 구조 정보 출력
+        console.log(`[Phase1.5 Debug] 최상위 폴더 수: ${topLevelFolders.length}, 전체 폴더 수 (하위 포함): ${allFolders.length}`);
+        if (allFolders.length > 0 && topLevelFolders.length > 0) {
+          console.log(`[Phase1.5 Debug] 최상위 폴더 구조 샘플:`, JSON.stringify(topLevelFolders[0], null, 2));
+        }
 
         if (playlistFolderId) {
-          const storedFolder = allFolders.find(f => f.id === playlistFolderId);
+          console.log(`[Phase1.5 Debug] 찾으려는 폴더 ID: "${playlistFolderId}" (타입: ${typeof playlistFolderId})`);
+          
+          // 다양한 방법으로 폴더 검색 시도
+          let storedFolder = allFolders.find(f => f.id === playlistFolderId);
+          
+          if (!storedFolder) {
+            // 타입 변환 시도 (string <-> number)
+            storedFolder = allFolders.find(f => String(f.id) === String(playlistFolderId));
+            if (storedFolder) {
+              console.log(`[Phase1.5 Debug] 타입 변환으로 폴더 발견!`);
+            }
+          }
+          
           if (storedFolder) {
             playlistFolderName = storedFolder.name;
             console.log(`[Phase1.5] 저장된 폴더 사용: "${playlistFolderName}" (ID: ${playlistFolderId})`);
           } else {
-            console.warn(`[Phase1.5] 저장된 폴더 ID ${playlistFolderId}를 찾을 수 없어 이름으로 재검색합니다.`);
+            console.warn(`[Phase1.5] 저장된 폴더 ID ${playlistFolderId}를 찾을 수 없습니다.`);
+            console.warn(`[Phase1.5] 현재 Eagle 폴더 목록:`, allFolders.map(f => `"${f.name}" (ID: ${f.id}, 타입: ${typeof f.id})`).join(', '));
             playlistFolderId = null;
           }
         }
@@ -337,7 +370,18 @@ class SubscriptionChecker {
         const desiredName = (playlistFolderName && playlistFolderName.trim()) || 'Default Playlist';
 
         if (!playlistFolderId) {
-          const existing = allFolders.find(f => f.name === desiredName);
+          // 이름으로 재검색 (정확한 일치 먼저 시도)
+          let existing = allFolders.find(f => f.name === desiredName);
+          
+          // 정확한 일치가 없으면 대소문자 무시하고 검색
+          if (!existing) {
+            const normalizedDesired = desiredName.toLowerCase().trim();
+            existing = allFolders.find(f => f.name.toLowerCase().trim() === normalizedDesired);
+            if (existing) {
+              console.log(`[Phase1.5] 대소문자 무시 검색으로 폴더 발견: "${existing.name}" vs "${desiredName}"`);
+            }
+          }
+          
           if (existing) {
             playlistFolderId = existing.id;
             playlistFolderName = existing.name;

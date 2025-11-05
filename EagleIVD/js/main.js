@@ -4,7 +4,7 @@
  */
 
 const path = require('path');
-let DownloadManager, EnhancedSubscriptionManager, LibraryMaintenance, eagleApi, utils, uiController;
+let DownloadManager, EnhancedSubscriptionManager, LibraryMaintenance, EagleSync, eagleApi, utils, uiController;
 const subscriptionDb = require('../js/modules/subscription-db.js');
 const settings = require('../js/modules/settings.js');
 console.log("DB모듈 로드 성공");
@@ -43,6 +43,10 @@ function loadModules() {
     // 라이브러리 유지 관리 모듈 로드
     LibraryMaintenance = require('../js/modules/library-maintenance.js');
     console.log("라이브러리 유지 관리 모듈 로드 성공");
+    
+    // Eagle Sync 모듈 로드
+    EagleSync = require('../js/modules/eagle-sync.js');
+    console.log("Eagle Sync 모듈 로드 성공");
     
     // Eagle API 모듈 로드
     eagleApi = require('../js/modules/eagle-api.js');
@@ -509,31 +513,281 @@ eagle.onPluginCreate(async (plugin) => {
     }
   };
   
-  // 불일치 항목 수정
-  window.fixInconsistencies = async () => {
+  // ============================================
+  // Eagle Sync 관련 함수들
+  // ============================================
+  
+  // Eagle → DB 동기화
+  let eagleSyncInstance = null;
+  
+  window.syncEagleToDb = async () => {
     try {
-      uiController.updateMaintenanceUI("불일치 항목 수정을 시작합니다...", 0, true);
+      uiController.updateMaintenanceUI("Eagle → DB 동기화를 시작합니다...", 0, true);
+      uiController.appendLog("🔄 Eagle 라이브러리 스캔 시작...");
       
-      // 상태 업데이트 이벤트 리스너
-      libraryMaintenance.on('statusUpdate', (message) => {
+      // EagleSync 인스턴스 생성
+      eagleSyncInstance = new EagleSync();
+      
+      // 이벤트 리스너 등록
+      eagleSyncInstance.on('statusUpdate', (message) => {
         uiController.updateMaintenanceUI(message, 50);
         uiController.appendLog(message);
       });
       
-      // 작업 완료 이벤트 리스너
-      libraryMaintenance.once('fixComplete', () => {
-        uiController.updateMaintenanceUI("불일치 항목 수정이 완료되었습니다.", 100, false);
-        libraryMaintenance.removeAllListeners('statusUpdate');
+      eagleSyncInstance.on('duplicateProgress', (data) => {
+        const percent = Math.floor((data.checked / data.total) * 100);
+        uiController.updateMaintenanceUI(
+          `중복 체크 중: ${data.checked}/${data.total} (${data.duplicatesFound}개 발견)`,
+          percent
+        );
       });
       
-      // 불일치 항목 수정 실행
-      const report = await libraryMaintenance.fixInconsistencies('db');
-      console.log("불일치 항목 수정 완료:", report);
+      eagleSyncInstance.on('syncCompleted', (report) => {
+        uiController.updateMaintenanceUI("동기화 완료!", 100, false);
+        uiController.appendLog(`✅ 동기화 완료: ${report.processedVideos}개 비디오 (${report.duplicatesFound}개 중복)`);
+        uiController.showSuccess(`동기화 완료!\n비디오: ${report.processedVideos}개\n중복: ${report.duplicatesFound}개`);
+      });
+      
+      // 동기화 실행
+      const result = await eagleSyncInstance.syncEagleToDb({
+        clearExisting: true,
+        excludeDefaultPlaylist: true
+      });
+      
+      console.log("✅ Eagle → DB 동기화 완료:", result);
+      
     } catch (error) {
-      console.error("불일치 항목 수정 실패:", error);
-      uiController.showError(`불일치 항목 수정 실패: ${error.message}`);
+      console.error("❌ Eagle → DB 동기화 실패:", error);
+      uiController.showError(`동기화 실패: ${error.message}`);
       uiController.updateMaintenanceUI("오류 발생", 0, false);
-      libraryMaintenance.removeAllListeners();
+    }
+  };
+  
+  // 임시 플레이리스트 보기
+  window.viewTempPlaylists = async () => {
+    try {
+      const tempPlaylists = await subscriptionDb.getAllTempPlaylists();
+      const allPlaylists = await subscriptionDb.getAllPlaylists(); // 기존 플레이리스트 목록
+      
+      const modal = document.getElementById('tempPlaylistModal');
+      const listContainer = document.getElementById('tempPlaylistList');
+      
+      if (!modal || !listContainer) {
+        console.error('Modal elements not found');
+        return;
+      }
+      
+      // 기존 플레이리스트 옵션 생성
+      const playlistOptions = allPlaylists.map(pl => 
+        `<option value="${pl.id}">${pl.user_title || pl.youtube_title || 'Untitled'} (${pl.videos}개)</option>`
+      ).join('');
+      
+      // 리스트 렌더링
+      if (tempPlaylists.length === 0) {
+        listContainer.innerHTML = '<div class="text-center text-gray-500 py-8">임시 플레이리스트가 없습니다.</div>';
+      } else {
+        listContainer.innerHTML = tempPlaylists.map(tp => `
+          <div class="border rounded-lg p-4 bg-white">
+            <div class="flex justify-between items-start mb-2">
+              <div class="flex-1">
+                <h4 class="font-bold text-lg">📁 ${tp.eagle_folder_name}</h4>
+                ${tp.detected_playlist_name ? `
+                  <p class="text-sm text-gray-600">
+                    감지된 이름: <span class="font-semibold">${tp.detected_playlist_name}</span>
+                    <span class="ml-2 px-2 py-1 text-xs rounded ${
+                      tp.confidence_score > 0.8 ? 'bg-green-100 text-green-800' : 
+                      tp.confidence_score > 0.5 ? 'bg-yellow-100 text-yellow-800' : 
+                      'bg-red-100 text-red-800'
+                    }">
+                      신뢰도 ${(tp.confidence_score * 100).toFixed(0)}%
+                    </span>
+                  </p>
+                ` : '<p class="text-sm text-gray-500">플레이리스트 이름 감지 안됨</p>'}
+                <p class="text-sm text-gray-600">비디오: ${tp.actual_video_count}개</p>
+              </div>
+            </div>
+            
+            <div class="mt-3">
+              <label class="text-sm font-semibold block mb-1">마이그레이션 방식:</label>
+              <select id="migrateMode_${tp.id}" class="border p-2 w-full text-sm" onchange="window.togglePlaylistInput(${tp.id})">
+                <option value="new">새 플레이리스트 생성</option>
+                <option value="existing">기존 플레이리스트에 추가</option>
+              </select>
+            </div>
+            
+            <div id="newPlaylistInput_${tp.id}" class="mt-3">
+              <label class="text-sm font-semibold">플레이리스트 URL:</label>
+              <input 
+                type="text" 
+                id="playlistUrl_${tp.id}" 
+                class="border p-2 w-full text-sm mt-1" 
+                placeholder="https://youtube.com/playlist?list=..."
+                value="${tp.playlist_url || ''}"
+              >
+            </div>
+            
+            <div id="existingPlaylistInput_${tp.id}" class="mt-3 hidden">
+              <label class="text-sm font-semibold">기존 플레이리스트 선택:</label>
+              <select id="existingPlaylistId_${tp.id}" class="border p-2 w-full text-sm mt-1">
+                <option value="">-- 선택하세요 --</option>
+                ${playlistOptions}
+              </select>
+            </div>
+            
+            <div class="mt-3 flex gap-2">
+              <button 
+                onclick="window.migrateTempPlaylist(${tp.id})"
+                class="bg-blue-500 text-white px-3 py-1 rounded text-sm flex-1"
+              >
+                마이그레이션
+              </button>
+              <button 
+                onclick="window.viewTempPlaylistVideos(${tp.id})"
+                class="bg-gray-500 text-white px-3 py-1 rounded text-sm"
+              >
+                비디오 목록
+              </button>
+            </div>
+          </div>
+        `).join('');
+      }
+      
+      // 모달 표시
+      modal.classList.remove('hidden');
+      modal.style.display = 'flex';
+      
+    } catch (error) {
+      console.error('임시 플레이리스트 로드 실패:', error);
+      uiController.showError(`임시 플레이리스트 로드 실패: ${error.message}`);
+    }
+  };
+  
+  // 플레이리스트 입력 필드 토글
+  window.togglePlaylistInput = (tempPlaylistId) => {
+    const mode = document.getElementById(`migrateMode_${tempPlaylistId}`).value;
+    const newInput = document.getElementById(`newPlaylistInput_${tempPlaylistId}`);
+    const existingInput = document.getElementById(`existingPlaylistInput_${tempPlaylistId}`);
+    
+    if (mode === 'new') {
+      newInput.classList.remove('hidden');
+      existingInput.classList.add('hidden');
+    } else {
+      newInput.classList.add('hidden');
+      existingInput.classList.remove('hidden');
+    }
+  };
+  
+  // 임시 플레이리스트 마이그레이션
+  window.migrateTempPlaylist = async (tempPlaylistId) => {
+    try {
+      const mode = document.getElementById(`migrateMode_${tempPlaylistId}`).value;
+      
+      if (!eagleSyncInstance) {
+        eagleSyncInstance = new EagleSync();
+      }
+      
+      let result;
+      
+      if (mode === 'new') {
+        // 새 플레이리스트 생성
+        const urlInput = document.getElementById(`playlistUrl_${tempPlaylistId}`);
+        const playlistUrl = urlInput ? urlInput.value.trim() : '';
+        
+        if (!playlistUrl) {
+          uiController.showError('플레이리스트 URL을 입력해주세요.');
+          return;
+        }
+        
+        uiController.appendLog(`📤 새 플레이리스트로 마이그레이션: temp_playlist ${tempPlaylistId}`);
+        result = await eagleSyncInstance.migrateToMain(tempPlaylistId, playlistUrl);
+        
+      } else {
+        // 기존 플레이리스트에 추가
+        const existingSelect = document.getElementById(`existingPlaylistId_${tempPlaylistId}`);
+        const existingPlaylistId = existingSelect ? parseInt(existingSelect.value) : null;
+        
+        if (!existingPlaylistId) {
+          uiController.showError('기존 플레이리스트를 선택해주세요.');
+          return;
+        }
+        
+        uiController.appendLog(`📤 기존 플레이리스트에 추가: temp_playlist ${tempPlaylistId} → playlist ${existingPlaylistId}`);
+        result = await eagleSyncInstance.migrateToExistingPlaylist(tempPlaylistId, existingPlaylistId);
+      }
+      
+      uiController.showSuccess(
+        `마이그레이션 완료!\n` +
+        `- 이동된 비디오: ${result.migratedVideos}개\n` +
+        `- 건너뛴 중복: ${result.skippedDuplicates}개`
+      );
+      
+      // 모달 새로고침
+      await window.viewTempPlaylists();
+      
+      console.log('✅ 마이그레이션 완료:', result);
+      
+    } catch (error) {
+      console.error('마이그레이션 실패:', error);
+      uiController.showError(`마이그레이션 실패: ${error.message}`);
+    }
+  };
+  
+  // 임시 플레이리스트의 비디오 목록 보기
+  window.viewTempPlaylistVideos = async (tempPlaylistId) => {
+    try {
+      const videos = await subscriptionDb.getTempVideosByPlaylist(tempPlaylistId);
+      
+      const videoList = videos.map((v, i) => 
+        `${i + 1}. ${v.title} (${v.video_id})${v.is_duplicate ? ' [중복]' : ''}`
+      ).join('\n');
+      
+      alert(`비디오 목록 (총 ${videos.length}개):\n\n${videoList}`);
+      
+    } catch (error) {
+      console.error('비디오 목록 로드 실패:', error);
+      uiController.showError(`비디오 목록 로드 실패: ${error.message}`);
+    }
+  };
+  
+  // 임시 데이터 전체 삭제
+  window.clearTempData = async () => {
+    try {
+      if (!confirm('정말로 모든 임시 데이터를 삭제하시겠습니까?')) {
+        return;
+      }
+      
+      await subscriptionDb.clearTempTables();
+      uiController.showSuccess('임시 데이터가 모두 삭제되었습니다.');
+      
+      // 모달 닫기
+      const modal = document.getElementById('tempPlaylistModal');
+      if (modal) {
+        modal.classList.add('hidden');
+        modal.style.display = 'none';
+      }
+      
+    } catch (error) {
+      console.error('임시 데이터 삭제 실패:', error);
+      uiController.showError(`삭제 실패: ${error.message}`);
+    }
+  };
+  
+  // 동기화된 임시 데이터만 삭제
+  window.clearSyncedTempData = async () => {
+    try {
+      if (!confirm('동기화된 임시 데이터를 삭제하시겠습니까?')) {
+        return;
+      }
+      
+      await subscriptionDb.clearSyncedTempData();
+      uiController.showSuccess('동기화된 데이터가 삭제되었습니다.');
+      
+      // 모달 새로고침
+      await window.viewTempPlaylists();
+      
+    } catch (error) {
+      console.error('동기화된 데이터 삭제 실패:', error);
+      uiController.showError(`삭제 실패: ${error.message}`);
     }
   };
   

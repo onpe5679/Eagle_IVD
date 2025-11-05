@@ -6,6 +6,7 @@
 const { spawn } = require("child_process");
 const EventEmitter = require('events');
 const path = require("path");
+const fs = require('fs').promises;
 
 /**
  * 영상 다운로드 상태
@@ -157,7 +158,7 @@ class VideoDownloadQueue extends EventEmitter {
           }
         }
       }
-      
+
       this.stats.total += addedCount;
       
       this.emit('playlistAdded', {
@@ -296,11 +297,30 @@ class VideoDownloadQueue extends EventEmitter {
     const threadId = videoItem.id.substring(0, 8);
     videoItem.threadId = threadId;
     
+    // ✅ 고유 임시 폴더 생성 (스레드별 분리)
+    const videoTempFolder = path.join(
+      this.downloadManager.downloadFolder,
+      `temp_${videoItem.id}`
+    );
+    
+    try {
+      await fs.mkdir(videoTempFolder, { recursive: true });
+      console.log(`📁 [Thread-${threadId}] Created temp folder: ${videoTempFolder}`);
+    } catch (mkdirErr) {
+      console.error(`❌ [Thread-${threadId}] Failed to create temp folder:`, mkdirErr);
+      videoItem.status = VideoStatus.FAILED;
+      videoItem.errorMessage = `Failed to create temp folder: ${mkdirErr.message}`;
+      videoItem.incrementRetry();
+      this.stats.failed++;
+      this.emit('videoFailed', videoItem);
+      return;
+    }
+    
     this.emit('videoStarted', videoItem);
     
     try {
-      // 다운로드 명령어 구성
-      const args = this.buildVideoDownloadArgs(videoItem);
+      // 다운로드 명령어 구성 (✅ 고유 폴더 지정)
+      const args = this.buildVideoDownloadArgs(videoItem, videoTempFolder);
       
       console.log(`🚀 [Thread-${threadId}] Starting download: ${videoItem.title}`);
       
@@ -366,7 +386,7 @@ class VideoDownloadQueue extends EventEmitter {
             console.error(`❌ [Thread-${threadId}] DB update failed for ${videoItem.title}:`, dbError);
           }
           
-          // 개별 영상 다운로드 완료 시 즉시 Eagle 임포트
+          // 개별 영상 다운로드 완료 시 즉시 Eagle 임포트 (✅ 고유 폴더 사용)
           if (this.importer) {
             try {
               console.log(`🎯 [Thread-${threadId}] Starting Eagle import for: ${videoItem.title}`);
@@ -398,14 +418,15 @@ class VideoDownloadQueue extends EventEmitter {
                 eagleFolderId: videoItem.folderId
               };
 
-              // Eagle에 즉시 임포트
+              // Eagle에 즉시 임포트 (✅ 고유 폴더로 분리 임포트)
               await this.importer.importAndRemoveDownloadedFiles(
-                this.downloadManager.downloadFolder,
+                videoTempFolder,  // ✅ 고유 임시 폴더 전달
                 videoItem.url,
                 playlistMetadata,
                 videoItem.folderName,
                 videoMetadata,
-                [videoItem.id]
+                [videoItem.id],
+                playlistContext
               );
               
               console.log(`✅ [Thread-${threadId}] Eagle import completed for: ${videoItem.title}`);
@@ -429,13 +450,29 @@ class VideoDownloadQueue extends EventEmitter {
               } catch (unlockError) {
                 console.error(`❌ [Thread-${threadId}] Failed to release processing lock:`, unlockError);
               }
+            } finally {
+              // ✅ Eagle 임포트 완료 후 임시 폴더 전체 삭제 (임시 파일 모두 정리)
+              try {
+                await fs.rm(videoTempFolder, { recursive: true, force: true });
+                console.log(`🗑️ [Thread-${threadId}] Cleaned up temp folder: ${videoTempFolder}`);
+              } catch (cleanupError) {
+                console.warn(`⚠️ [Thread-${threadId}] Failed to cleanup temp folder:`, cleanupError);
+              }
             }
           } else {
-            // Importer가 없는 경우 처리 락 해제
+            // Importer가 없는 경우 처리 락 해제 및 임시 폴더 삭제
             try {
               await subscriptionDb.releaseVideoProcessingLock(videoItem.id);
             } catch (unlockError) {
               console.error(`❌ [Thread-${threadId}] Failed to release processing lock:`, unlockError);
+            }
+            
+            // ✅ 임시 폴더 삭제
+            try {
+              await fs.rm(videoTempFolder, { recursive: true, force: true });
+              console.log(`🗑️ [Thread-${threadId}] Cleaned up temp folder (no importer): ${videoTempFolder}`);
+            } catch (cleanupError) {
+              console.warn(`⚠️ [Thread-${threadId}] Failed to cleanup temp folder:`, cleanupError);
             }
           }
           
@@ -461,6 +498,14 @@ class VideoDownloadQueue extends EventEmitter {
             }
           }
           
+          // ✅ 다운로드 실패 시도 임시 폴더 정리
+          try {
+            await fs.rm(videoTempFolder, { recursive: true, force: true });
+            console.log(`🗑️ [Thread-${threadId}] Cleaned up temp folder after download failure`);
+          } catch (cleanupError) {
+            console.warn(`⚠️ [Thread-${threadId}] Failed to cleanup temp folder after failure:`, cleanupError);
+          }
+          
           this.emit('videoFailed', videoItem);
           console.error(`❌ [Thread-${threadId}] Download failed: ${videoItem.title} (code: ${code})`);
         }
@@ -474,20 +519,31 @@ class VideoDownloadQueue extends EventEmitter {
       videoItem.errorMessage = error.message;
       videoItem.incrementRetry();
       this.stats.failed++;
+      
+      // ✅ 예외 발생 시도 임시 폴더 정리
+      try {
+        await fs.rm(videoTempFolder, { recursive: true, force: true });
+        console.log(`🗑️ [Thread-${threadId}] Cleaned up temp folder after exception`);
+      } catch (cleanupError) {
+        console.warn(`⚠️ [Thread-${threadId}] Failed to cleanup temp folder after exception:`, cleanupError);
+      }
+      
       this.emit('videoFailed', videoItem);
-      console.error(`Download failed: ${videoItem.title}`, error);
+      console.error(`❌ [Thread-${threadId}] Download failed: ${videoItem.title}`, error);
     }
   }
   
   /**
    * 개별 영상 다운로드 인수 구성
    * @param {VideoDownloadItem} videoItem - 영상 정보
+   * @param {string} outputFolder - 출력 폴더 경로 (선택, 기본값: 공용 다운로드 폴더)
    * @returns {Array<string>} 명령줄 인수
    */
-  buildVideoDownloadArgs(videoItem) {
+  buildVideoDownloadArgs(videoItem, outputFolder = null) {
+    const folder = outputFolder || this.downloadManager.downloadFolder;
     const args = [
       '--ffmpeg-location', this.downloadManager.ffmpegPath,
-      '-o', path.join(this.downloadManager.downloadFolder, '%(title)s.%(ext)s'),
+      '-o', path.join(folder, '%(title)s.%(ext)s'),
       '--progress',
       '--newline',
       '--no-warnings',

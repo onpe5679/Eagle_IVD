@@ -285,6 +285,26 @@
         
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="border p-4 rounded bg-white">
+            <h4 class="font-bold mb-2">🔄 Eagle → DB 동기화</h4>
+            <p class="text-sm text-gray-600 mb-3">
+              Eagle 라이브러리의 모든 YouTube 비디오를 DB로 가져옵니다. 중복 자동 감지 및 플레이리스트 이름 스마트 감지 기능 포함.
+            </p>
+            <button id="syncEagleToDbBtn" class="bg-purple-600 text-white px-4 py-2 rounded w-full font-bold">
+              Eagle → DB 동기화
+            </button>
+          </div>
+          
+          <div class="border p-4 rounded bg-white">
+            <h4 class="font-bold mb-2">📋 임시 플레이리스트 관리</h4>
+            <p class="text-sm text-gray-600 mb-3">
+              동기화된 임시 플레이리스트를 확인하고 메인 DB로 마이그레이션합니다.
+            </p>
+            <button id="viewTempPlaylistsBtn" class="bg-indigo-500 text-white px-4 py-2 rounded w-full">
+              임시 플레이리스트 보기
+            </button>
+          </div>
+          
+          <div class="border p-4 rounded bg-white">
             <h4 class="font-bold mb-2">중복 영상 검사</h4>
             <p class="text-sm text-gray-600 mb-3">
               영상 ID가 같은 중복 항목을 검사하고 자동으로 통합합니다. 폴더, 태그, 주석이 모두 통합됩니다.
@@ -304,25 +324,6 @@
             </button>
           </div>
           
-          <div class="border p-4 rounded bg-white">
-            <h4 class="font-bold mb-2">불일치 항목 수정</h4>
-            <p class="text-sm text-gray-600 mb-3">
-              Eagle에는 있지만 DB에 없는 항목을 "기타 YouTube 영상" 구독에 추가합니다.
-            </p>
-            <button id="fixInconsistenciesBtn" class="bg-green-500 text-white px-4 py-2 rounded w-full">
-              불일치 항목 수정
-            </button>
-          </div>
-          
-          <div class="border p-4 rounded bg-white">
-            <h4 class="font-bold mb-2">DB에서 불일치 항목 삭제</h4>
-            <p class="text-sm text-gray-600 mb-3">
-              DB에는 있지만 Eagle에 없는 항목을 DB에서 삭제합니다.
-            </p>
-            <button id="removeInconsistenciesBtn" class="bg-yellow-500 text-white px-4 py-2 rounded w-full">
-              DB에서 삭제
-            </button>
-          </div>
           
           <div class="border p-4 rounded bg-white">
             <h4 class="font-bold mb-2">최근 유지 관리 보고서</h4>
@@ -359,6 +360,39 @@
     <!-- Logs -->
     <div id="logs" class="mt-4 p-2 bg-gray-50 text-gray-600">
       <!-- runtime logs -->
+    </div>
+  </div>
+
+  <!-- 임시 플레이리스트 모달 -->
+  <div id="tempPlaylistModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50" style="display: none;">
+    <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 flex flex-col" style="max-height: 90vh;">
+      <!-- 헤더 (고정) -->
+      <div class="p-4 border-b flex justify-between items-center flex-shrink-0">
+        <h3 class="text-xl font-bold">📋 임시 플레이리스트 관리</h3>
+        <button id="closeTempPlaylistModal" class="text-gray-500 hover:text-gray-700">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      
+      <!-- 스크롤 영역 -->
+      <div class="p-4 flex-1 overflow-y-auto" style="min-height: 0;">
+        <div id="tempPlaylistList" class="space-y-4">
+          <!-- 동적으로 생성됨 -->
+          <div class="text-center text-gray-500 py-8">임시 플레이리스트가 없습니다.</div>
+        </div>
+      </div>
+      
+      <!-- 푸터 버튼 (고정) -->
+      <div class="p-4 border-t bg-gray-50 flex justify-between flex-shrink-0">
+        <button id="clearTempDataBtn" class="bg-red-500 text-white px-4 py-2 rounded">
+          임시 데이터 전체 삭제
+        </button>
+        <button id="clearSyncedTempDataBtn" class="bg-orange-500 text-white px-4 py-2 rounded">
+          동기화된 데이터만 삭제
+        </button>
+      </div>
     </div>
   </div>
 
