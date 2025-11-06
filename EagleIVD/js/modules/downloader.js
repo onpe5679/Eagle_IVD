@@ -101,6 +101,12 @@ class DownloadManager extends EventEmitter {
       this.updateStatusUI(`Failed: ${videoItem.title} - ${videoItem.errorMessage}`);
       this.emit('videoFailed', videoItem);
     });
+
+    this.downloadQueue.on('videoSkipped', (videoItem) => {
+      const reason = videoItem.errorMessage || 'Video unavailable';
+      this.updateStatusUI(`Skipped: ${videoItem.title} - ${reason}`);
+      this.emit('videoSkipped', videoItem);
+    });
     
     this.downloadQueue.on('videoImported', (videoItem) => {
       this.updateStatusUI(`Imported to Eagle: ${videoItem.title}`);

@@ -206,7 +206,7 @@ class SubscriptionChecker {
       progressCallback(current, total, `플레이리스트 확인 중: ${sub.user_title || sub.youtube_title || sub.url}`);
     }
     const stats = { totalVideosFound: 0, newVideosFound: 0, processedVideos: 0, downloadedVideos: 0, skippedVideos: 0, errorVideos: 0 };
-    const failedVideoErrors = new Map();
+    const videoIssueReasons = new Map();
     try {
       // Phase 1: flat-playlist 메타데이터 조회 (필요 시만 실행)
       let fetchedIds = [];
@@ -542,11 +542,34 @@ class SubscriptionChecker {
       // 다운로드 완료를 기다림 (중복 제외된 영상만)
       const successIds = [];
       const failedIds = [];
+      const skippedIds = [];
       
       await new Promise((resolve) => {
         let completedCount = 0;
         const totalVideosToDownload = videosToDownload.length;
-        
+
+        const finishIfDone = () => {
+          if (completedCount >= totalVideosToDownload) {
+            this.downloadManager.downloadQueue.removeListener('videoCompleted', handleVideoCompleted);
+            this.downloadManager.downloadQueue.removeListener('videoFailed', handleVideoFailed);
+            this.downloadManager.downloadQueue.removeListener('videoSkipped', handleVideoSkipped);
+            resolve();
+          }
+        };
+
+        const handleVideoSkipped = (videoItem) => {
+          if (videosToDownload.includes(videoItem.id)) {
+            skippedIds.push(videoItem.id);
+            completedCount++;
+            stats.skippedVideos++;
+            videoIssueReasons.set(videoItem.id, videoItem.errorMessage || '영상이 아직 공개되지 않아 건너뜀');
+
+            this.updateStatusUI(`${sub.user_title || sub.youtube_title}: 건너뜀 (${completedCount}/${totalVideosToDownload}) - ${videoItem.title}`);
+
+            finishIfDone();
+          }
+        };
+
         const handleVideoCompleted = (videoItem) => {
           if (videosToDownload.includes(videoItem.id)) {
             successIds.push(videoItem.id);
@@ -555,11 +578,7 @@ class SubscriptionChecker {
             
             this.updateStatusUI(`${sub.user_title || sub.youtube_title}: 완료 (${completedCount}/${totalVideosToDownload}) - ${videoItem.title}`);
             
-            if (completedCount >= totalVideosToDownload) {
-              this.downloadManager.downloadQueue.removeListener('videoCompleted', handleVideoCompleted);
-              this.downloadManager.downloadQueue.removeListener('videoFailed', handleVideoFailed);
-              resolve();
-            }
+            finishIfDone();
           }
         };
         
@@ -568,32 +587,30 @@ class SubscriptionChecker {
             failedIds.push(videoItem.id);
             completedCount++;
             stats.errorVideos++;
-            failedVideoErrors.set(videoItem.id, videoItem.errorMessage || '다운로드 실패');
+            videoIssueReasons.set(videoItem.id, videoItem.errorMessage || '다운로드 실패');
             
             this.updateStatusUI(`${sub.user_title || sub.youtube_title}: 실패 (${completedCount}/${totalVideosToDownload}) - ${videoItem.title}`);
             
-            if (completedCount >= totalVideosToDownload) {
-              this.downloadManager.downloadQueue.removeListener('videoCompleted', handleVideoCompleted);
-              this.downloadManager.downloadQueue.removeListener('videoFailed', handleVideoFailed);
-              resolve();
-            }
+            finishIfDone();
           }
         };
         
         // 이벤트 리스너 등록
         this.downloadManager.downloadQueue.on('videoCompleted', handleVideoCompleted);
         this.downloadManager.downloadQueue.on('videoFailed', handleVideoFailed);
+        this.downloadManager.downloadQueue.on('videoSkipped', handleVideoSkipped);
         
         // 타임아웃 설정 (30분)
         setTimeout(() => {
           this.downloadManager.downloadQueue.removeListener('videoCompleted', handleVideoCompleted);
           this.downloadManager.downloadQueue.removeListener('videoFailed', handleVideoFailed);
+          this.downloadManager.downloadQueue.removeListener('videoSkipped', handleVideoSkipped);
           console.warn(`Timeout waiting for downloads to complete for playlist: ${sub.user_title || sub.youtube_title}`);
           resolve();
         }, 30 * 60 * 1000);
       });
       
-      console.log(`[Download Queue] 재생목록 "${sub.user_title || sub.youtube_title}" - 성공: ${successIds.length}, 실패: ${failedIds.length}`);
+      console.log(`[Download Queue] 재생목록 "${sub.user_title || sub.youtube_title}" - 성공: ${successIds.length}, 실패: ${failedIds.length}, 건너뜀: ${skippedIds.length}`);
 
       // 다운로드 성공한 영상들을 DB에 추가
       for (const videoId of successIds) {
@@ -622,6 +639,30 @@ class SubscriptionChecker {
         }
       }
 
+      // 건너뛴 영상들도 DB에 기록
+      for (const videoId of skippedIds) {
+        const metadata = downloadedMetadata[videoId] || {};
+        const videoData = {
+          playlist_id: sub.id,
+          video_id: videoId,
+          title: metadata.title || videoId,
+          status: 'skipped',
+          downloaded: false,
+          auto_download: sub.autoDownload || false,
+          skip: true,
+          eagle_linked: false,
+          source_playlist_url: sub.url,
+          failed_reason: videoIssueReasons.get(videoId) || '영상이 아직 공개되지 않아 건너뜀',
+          first_attempt: new Date().toISOString()
+        };
+        console.log(`[DB Add Skipped] Playlist "${sub.user_title || sub.youtube_title}": Recording skipped video ${metadata.title || videoId} (ID: ${videoId})`);
+        try {
+          await subscriptionDb.addVideo(videoData);
+        } catch (dbError) {
+          console.error(`[DB AddVideo - Skipped] Error adding skipped video ${videoId} for playlist ${sub.id}:`, dbError, videoData);
+        }
+      }
+
       // 실패한 영상들도 DB에 기록 (이미 선언된 failedIds 사용)
       for (const videoId of failedIds) {
         const metadata = downloadedMetadata[videoId] || {};
@@ -635,7 +676,7 @@ class SubscriptionChecker {
           skip: true,  // 실패한 영상은 자동으로 스킵 처리
           eagle_linked: false,
           source_playlist_url: sub.url,
-          failed_reason: failedVideoErrors.get(videoId) || '알 수 없는 오류로 다운로드 실패',
+          failed_reason: videoIssueReasons.get(videoId) || '알 수 없는 오류로 다운로드 실패',
           first_attempt: new Date().toISOString()
         };
         console.log(`[DB Add Failed] Playlist "${sub.user_title || sub.youtube_title}": Recording failed video ${metadata.title || videoId} (ID: ${videoId})`);

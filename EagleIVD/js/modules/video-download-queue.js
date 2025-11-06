@@ -16,7 +16,8 @@ const VideoStatus = {
   DOWNLOADING: 'downloading',
   COMPLETED: 'completed',
   FAILED: 'failed',
-  CANCELLED: 'cancelled'
+  CANCELLED: 'cancelled',
+  SKIPPED: 'skipped'
 };
 
 /**
@@ -92,11 +93,15 @@ class VideoDownloadQueue extends EventEmitter {
       total: 0,
       completed: 0,
       failed: 0,
-      cancelled: 0
+      cancelled: 0,
+      skipped: 0
     };
     
     // Eagle 임포트를 위한 importer 참조
     this.importer = null;
+
+    // 기본적으로 비공개/예정 영상은 자동으로 건너뜀
+    this.skipUnavailableVideos = true;
   }
   
   /**
@@ -329,6 +334,7 @@ class VideoDownloadQueue extends EventEmitter {
       this.activeDownloads.set(videoItem.id, process);
       
       let outputBuffer = '';
+      let stderrBuffer = '';
       
       process.stdout.on('data', (data) => {
         const output = data.toString();
@@ -362,9 +368,11 @@ class VideoDownloadQueue extends EventEmitter {
       });
       
       process.stderr.on('data', (data) => {
-        const errorOutput = data.toString().trim();
-        if (errorOutput) {
-          console.error(`❌ [Thread-${threadId}] Error: ${errorOutput}`);
+        const errorOutput = data.toString();
+        stderrBuffer += errorOutput;
+        const trimmed = errorOutput.trim();
+        if (trimmed) {
+          console.error(`❌ [Thread-${threadId}] Error: ${trimmed}`);
         }
       });
       
@@ -479,15 +487,24 @@ class VideoDownloadQueue extends EventEmitter {
           this.emit('videoCompleted', videoItem);
           console.log(`✅ [Thread-${threadId}] Download completed: ${videoItem.title}`);
         } else {
-          videoItem.status = VideoStatus.FAILED;
-          videoItem.errorMessage = `Process exited with code ${code}`;
-          videoItem.incrementRetry();
-          this.stats.failed++;
+          const failureDetails = this.determineFailureHandling(stderrBuffer, outputBuffer, code);
+          videoItem.errorMessage = failureDetails.reason;
+          const shouldSkip = failureDetails.shouldSkip && this.skipUnavailableVideos;
           
-          // 데이터베이스에 실패 상태 업데이트 및 처리 락 해제
+          if (shouldSkip) {
+            videoItem.status = VideoStatus.SKIPPED;
+            this.stats.skipped++;
+          } else {
+            videoItem.status = VideoStatus.FAILED;
+            videoItem.incrementRetry();
+            this.stats.failed++;
+          }
+          
+          // 데이터베이스에 상태 업데이트 및 처리 락 해제
           try {
-            await subscriptionDb.markVideoDownloadComplete(videoItem.id, 'failed', videoItem.errorMessage);
-            console.log(`❌ [Thread-${threadId}] DB updated: ${videoItem.title} marked as failed`);
+            const newStatus = shouldSkip ? 'skipped' : 'failed';
+            await subscriptionDb.markVideoDownloadComplete(videoItem.id, newStatus, videoItem.errorMessage);
+            console.log(`${shouldSkip ? '⚠️' : '❌'} [Thread-${threadId}] DB updated: ${videoItem.title} marked as ${newStatus}`);
           } catch (dbError) {
             console.error(`❌ [Thread-${threadId}] DB update failed for ${videoItem.title}:`, dbError);
             // DB 업데이트 실패 시에도 처리 락 해제 시도
@@ -498,16 +515,21 @@ class VideoDownloadQueue extends EventEmitter {
             }
           }
           
-          // ✅ 다운로드 실패 시도 임시 폴더 정리
+          // 실패/스킵 시 임시 폴더 정리
           try {
             await fs.rm(videoTempFolder, { recursive: true, force: true });
-            console.log(`🗑️ [Thread-${threadId}] Cleaned up temp folder after download failure`);
+            console.log(`🗑️ [Thread-${threadId}] Cleaned up temp folder after download ${shouldSkip ? 'skip' : 'failure'}`);
           } catch (cleanupError) {
-            console.warn(`⚠️ [Thread-${threadId}] Failed to cleanup temp folder after failure:`, cleanupError);
+            console.warn(`⚠️ [Thread-${threadId}] Failed to cleanup temp folder after ${shouldSkip ? 'skip' : 'failure'}:`, cleanupError);
           }
           
-          this.emit('videoFailed', videoItem);
-          console.error(`❌ [Thread-${threadId}] Download failed: ${videoItem.title} (code: ${code})`);
+          if (shouldSkip) {
+            this.emit('videoSkipped', videoItem);
+            console.warn(`⚠️ [Thread-${threadId}] Download skipped (unavailable): ${videoItem.title}`);
+          } else {
+            this.emit('videoFailed', videoItem);
+            console.error(`❌ [Thread-${threadId}] Download failed: ${videoItem.title} (code: ${code})`);
+          }
         }
         
         this.emit('queueProgress', this.getQueueStats());
@@ -622,6 +644,7 @@ class VideoDownloadQueue extends EventEmitter {
       completed: this.stats.completed,
       failed: this.stats.failed,
       cancelled: this.stats.cancelled,
+      skipped: this.stats.skipped,
       pending: this.queue.filter(item => item.status === VideoStatus.PENDING).length,
       downloading: this.activeDownloads.size
     };
@@ -671,7 +694,8 @@ class VideoDownloadQueue extends EventEmitter {
       total: 0,
       completed: 0,
       failed: 0,
-      cancelled: 0
+      cancelled: 0,
+      skipped: 0
     };
     this.emit('queueCleared');
   }
@@ -683,6 +707,55 @@ class VideoDownloadQueue extends EventEmitter {
   setMaxConcurrent(maxConcurrent) {
     this.maxConcurrent = Math.max(1, Math.min(10, maxConcurrent));
     console.log(`Max concurrent downloads set to: ${this.maxConcurrent}`);
+  }
+
+  /**
+   * 비공개/예정 영상 자동 건너뛰기 설정
+   * @param {boolean} enabled
+   */
+  setSkipUnavailableVideos(enabled) {
+    this.skipUnavailableVideos = !!enabled;
+    console.log(`Skip unavailable videos set to: ${this.skipUnavailableVideos}`);
+  }
+
+  determineFailureHandling(stderrOutput = '', stdoutOutput = '', code = 1) {
+    const combined = `${stderrOutput}\n${stdoutOutput}`.toLowerCase();
+    const privatePatterns = [
+      /private video/,
+      /sign in if you've been granted access/,
+      /members-only/
+    ];
+    const upcomingPatterns = [
+      /premieres? on/,
+      /premiering/,
+      /scheduled for/,
+      /upcoming live/,
+      /live event will begin/,
+      /premiere will begin/
+    ];
+
+    if (privatePatterns.some((regex) => regex.test(combined))) {
+      return { reason: 'Video is private or requires authentication', shouldSkip: true };
+    }
+
+    if (upcomingPatterns.some((regex) => regex.test(combined))) {
+      return { reason: 'Video is scheduled/premiere and not yet available', shouldSkip: true };
+    }
+
+    const fallback = this.extractLastMeaningfulLine(stderrOutput) ||
+      this.extractLastMeaningfulLine(stdoutOutput) ||
+      `Process exited with code ${code}`;
+
+    return { reason: fallback, shouldSkip: false };
+  }
+
+  extractLastMeaningfulLine(text = '') {
+    if (!text) return null;
+    const lines = text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return lines.pop() || null;
   }
 }
 
